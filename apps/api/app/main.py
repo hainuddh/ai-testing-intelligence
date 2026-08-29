@@ -3,13 +3,11 @@ from contextlib import asynccontextmanager
 from fastapi import APIRouter, FastAPI
 
 from app.config import settings
-from app.database import Base, engine
-from app.routers import auth, sources
+from app.routers import auth, content, database_status, sources, users
 
 
 @asynccontextmanager
 async def lifespan(_app: FastAPI):
-    Base.metadata.create_all(engine)
     yield
 
 
@@ -24,4 +22,7 @@ def health_check() -> dict[str, str]:
 
 api.include_router(auth.router)
 api.include_router(sources.router)
+api.include_router(content.router)
+api.include_router(users.router)
+api.include_router(database_status.router)
 app.include_router(api)

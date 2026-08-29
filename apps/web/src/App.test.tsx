@@ -14,94 +14,117 @@ const source = {
   topics: ['foundation-models'],
 }
 
-describe('technology intelligence workflow', () => {
+const json = (data: unknown, status = 200) => new Response(JSON.stringify(data), {
+  status,
+  headers: { 'Content-Type': 'application/json' },
+})
+
+describe('management radar workflow', () => {
   beforeEach(() => {
     vi.restoreAllMocks()
   })
 
-  it('submits login credentials and stores the returned token', async () => {
+  it('logs in, resolves the profile, and opens the content feed', async () => {
     const user = userEvent.setup()
-    const fetchMock = vi.spyOn(globalThis, 'fetch').mockResolvedValueOnce(
-      new Response(JSON.stringify({ access_token: 'radar-token' }), {
-        status: 200,
-        headers: { 'Content-Type': 'application/json' },
-      }),
-    ).mockResolvedValueOnce(
-      new Response(JSON.stringify({ items: [], total: 0 }), {
-        status: 200,
-        headers: { 'Content-Type': 'application/json' },
-      }),
-    )
+    const fetchMock = vi.spyOn(globalThis, 'fetch')
+      .mockResolvedValueOnce(json({ access_token: 'radar-token' }))
+      .mockResolvedValueOnce(json({ id: 'user-1', username: 'analyst', role: 'viewer' }))
+      .mockResolvedValueOnce(json({ items: [], total: 0 }))
 
     render(<App />)
     await user.type(screen.getByLabelText('用户名'), 'analyst')
     await user.type(screen.getByLabelText('密码'), 'secret-pass')
     await user.click(screen.getByRole('button', { name: '进入雷达' }))
 
-    await waitFor(() => expect(localStorage.getItem('access_token')).toBe('radar-token'))
+    expect(await screen.findByRole('heading', { name: '内容情报' })).toBeInTheDocument()
+    expect(localStorage.getItem('access_token')).toBe('radar-token')
     expect(fetchMock).toHaveBeenNthCalledWith(1, '/api/v1/auth/login', expect.objectContaining({
       method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({ username: 'analyst', password: 'secret-pass' }),
     }))
+    expect(fetchMock).toHaveBeenNthCalledWith(2, '/api/v1/auth/me', expect.objectContaining({
+      headers: expect.objectContaining({ Authorization: 'Bearer radar-token' }),
+    }))
+    expect(screen.queryByRole('button', { name: '用户管理' })).not.toBeInTheDocument()
   })
 
-  it('loads and displays sources when already authenticated', async () => {
+  it('loads content and sends a query through the intelligence search', async () => {
     localStorage.setItem('access_token', 'existing-token')
-    const fetchMock = vi.spyOn(globalThis, 'fetch').mockResolvedValueOnce(
-      new Response(JSON.stringify({ items: [source], total: 1 }), {
-        status: 200,
-        headers: { 'Content-Type': 'application/json' },
-      }),
-    )
+    const item = {
+      id: 'content-1', source_id: 'source-1', title: 'Agents gain new tools', url: 'https://example.com/agents',
+      summary: 'A concise intelligence summary', body: '', published_at: '2026-08-20T00:00:00Z', fetched_at: '2026-08-21T00:00:00Z',
+    }
+    const fetchMock = vi.spyOn(globalThis, 'fetch')
+      .mockResolvedValueOnce(json({ id: 'user-1', username: 'reader', role: 'viewer' }))
+      .mockResolvedValueOnce(json({ items: [item], total: 1 }))
+      .mockResolvedValueOnce(json({ items: [item], total: 1 }))
 
     render(<App />)
+    expect(await screen.findByText('Agents gain new tools')).toBeInTheDocument()
+    const search = screen.getByLabelText('检索内容')
+    await userEvent.type(search, 'agents')
+    await userEvent.type(search, '{Enter}')
 
-    expect(await screen.findByText('OpenAI Research')).toBeInTheDocument()
-    expect(screen.getByText('Frontier AI research and releases')).toBeInTheDocument()
-    expect(fetchMock).toHaveBeenCalledWith('/api/v1/sources', {
-      headers: { Authorization: 'Bearer existing-token' },
-    })
+    await waitFor(() => expect(fetchMock).toHaveBeenLastCalledWith(
+      '/api/v1/content?offset=0&limit=12&query=agents',
+      expect.objectContaining({ headers: expect.objectContaining({ Authorization: 'Bearer existing-token' }) }),
+    ))
   })
 
-  it('posts a new source from the creation form', async () => {
+  it('allows a maintainer to create a source', async () => {
     localStorage.setItem('access_token', 'existing-token')
     const user = userEvent.setup()
     const fetchMock = vi.spyOn(globalThis, 'fetch')
-      .mockResolvedValueOnce(new Response(JSON.stringify({ items: [], total: 0 }), { status: 200 }))
-      .mockResolvedValueOnce(new Response(JSON.stringify(source), { status: 201 }))
+      .mockResolvedValueOnce(json({ id: 'user-2', username: 'maintainer', role: 'maintainer' }))
+      .mockResolvedValueOnce(json({ items: [], total: 0 }))
+      .mockResolvedValueOnce(json({ items: [], total: 0 }))
+      .mockResolvedValueOnce(json(source, 201))
+      .mockResolvedValueOnce(json({ items: [source], total: 1 }))
 
     render(<App />)
-    await screen.findByText('暂无信源，建立第一个监听点。')
+    await screen.findByRole('heading', { name: '内容情报' })
+    await user.click(screen.getByRole('button', { name: '信源管理' }))
+    await screen.findByText('暂无信源监听点。')
     await user.click(screen.getByRole('button', { name: '新增信源' }))
-    await user.type(screen.getByLabelText('信源名称'), 'OpenAI Research')
+    await user.type(screen.getByLabelText('信源名称'), source.name)
     await user.click(screen.getByLabelText('信源类型'))
     await user.click(await screen.findByText('网站'))
-    await user.type(screen.getByLabelText('主页地址'), 'https://openai.com/research')
-    await user.type(screen.getByLabelText('描述'), 'Frontier AI research and releases')
-    await user.type(screen.getByLabelText('语言'), 'en')
     await user.click(screen.getByLabelText('可信等级'))
     await user.click(await screen.findByText('最高可信'))
+    await user.type(screen.getByLabelText('主页地址'), source.homepage_url)
+    await user.type(screen.getByLabelText('描述'), source.description)
+    await user.type(screen.getByLabelText('语言'), 'en')
     await user.type(screen.getByLabelText('关注主题'), 'foundation-models')
     await user.click(screen.getByRole('button', { name: '建立监听' }))
 
-    await waitFor(() => expect(fetchMock).toHaveBeenCalledTimes(2))
-    expect(fetchMock).toHaveBeenNthCalledWith(2, '/api/v1/sources', {
+    await waitFor(() => expect(fetchMock).toHaveBeenNthCalledWith(4, '/api/v1/sources', expect.objectContaining({
       method: 'POST',
-      headers: {
-        Authorization: 'Bearer existing-token',
-        'Content-Type': 'application/json',
-      },
       body: JSON.stringify({
-        name: 'OpenAI Research',
-        source_type: 'website',
-        homepage_url: 'https://openai.com/research',
-        description: 'Frontier AI research and releases',
-        languages: ['en'],
-        trust_level: 5,
-        topics: ['foundation-models'],
+        name: source.name, source_type: 'website', trust_level: 5, homepage_url: source.homepage_url,
+        description: source.description, languages: ['en'], topics: ['foundation-models'],
       }),
-    })
-    expect(await screen.findByText('OpenAI Research')).toBeInTheDocument()
+    })))
+    expect(await screen.findByText(source.name)).toBeInTheDocument()
+  })
+
+  it('shows admin-only user and database management', async () => {
+    localStorage.setItem('access_token', 'admin-token')
+    const user = userEvent.setup()
+    const fetchMock = vi.spyOn(globalThis, 'fetch')
+      .mockResolvedValueOnce(json({ id: 'admin-1', username: 'root', role: 'admin' }))
+      .mockResolvedValueOnce(json({ items: [], total: 0 }))
+      .mockResolvedValueOnce(json({ items: [{ id: 'user-3', username: 'operator', role: 'maintainer', is_active: true }], total: 1 }))
+      .mockResolvedValueOnce(json({ dialect: 'postgresql', row_counts: { users: 2, sources: 8, source_endpoints: 11, content_items: 240, fetch_runs: 15 } }))
+
+    render(<App />)
+    await screen.findByRole('heading', { name: '内容情报' })
+    await user.click(screen.getByRole('button', { name: '用户管理' }))
+    expect(await screen.findByText('operator')).toBeInTheDocument()
+    expect(screen.getByRole('button', { name: '新增用户' })).toBeInTheDocument()
+
+    await user.click(screen.getByRole('button', { name: '数据库状态' }))
+    expect(await screen.findByText('postgresql')).toBeInTheDocument()
+    expect(screen.getByText('240')).toBeInTheDocument()
+    expect(fetchMock).toHaveBeenCalledWith('/api/v1/database/status', expect.any(Object))
   })
 })

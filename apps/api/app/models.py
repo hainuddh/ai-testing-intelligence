@@ -1,3 +1,4 @@
+import hashlib
 from datetime import UTC, datetime
 
 from sqlalchemy import JSON, Boolean, DateTime, ForeignKey, Integer, String, Text
@@ -8,6 +9,10 @@ from app.database import Base
 
 def utc_now() -> datetime:
     return datetime.now(UTC)
+
+
+def url_digest(context) -> str:
+    return hashlib.sha256(context.get_current_parameters()["url"].encode()).hexdigest()
 
 
 class User(Base):
@@ -43,6 +48,9 @@ class Source(Base):
     endpoints: Mapped[list["SourceEndpoint"]] = relationship(
         back_populates="source", cascade="all, delete-orphan"
     )
+    content_items: Mapped[list["ContentItem"]] = relationship(
+        back_populates="source", cascade="all, delete-orphan"
+    )
 
 
 class SourceEndpoint(Base):
@@ -60,3 +68,42 @@ class SourceEndpoint(Base):
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utc_now)
 
     source: Mapped[Source] = relationship(back_populates="endpoints")
+    fetch_runs: Mapped[list["FetchRun"]] = relationship(
+        back_populates="endpoint", cascade="all, delete-orphan"
+    )
+
+
+class ContentItem(Base):
+    __tablename__ = "content_items"
+
+    id: Mapped[int] = mapped_column(primary_key=True)
+    source_id: Mapped[int] = mapped_column(ForeignKey("sources.id"), index=True)
+    title: Mapped[str] = mapped_column(String(500))
+    url: Mapped[str] = mapped_column(String(2048))
+    url_hash: Mapped[str] = mapped_column(String(64), unique=True, index=True, default=url_digest)
+    summary: Mapped[str | None] = mapped_column(Text, nullable=True)
+    body: Mapped[str | None] = mapped_column(Text, nullable=True)
+    published_at: Mapped[datetime | None] = mapped_column(
+        DateTime(timezone=True), nullable=True, index=True
+    )
+    fetched_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), default=utc_now, index=True
+    )
+
+    source: Mapped[Source] = relationship(back_populates="content_items")
+
+
+class FetchRun(Base):
+    __tablename__ = "fetch_runs"
+
+    id: Mapped[int] = mapped_column(primary_key=True)
+    endpoint_id: Mapped[int] = mapped_column(ForeignKey("source_endpoints.id"), index=True)
+    status: Mapped[str] = mapped_column(String(30), index=True)
+    items_created: Mapped[int] = mapped_column(Integer, default=0)
+    error: Mapped[str | None] = mapped_column(Text, nullable=True)
+    started_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), default=utc_now, index=True
+    )
+    completed_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
+
+    endpoint: Mapped[SourceEndpoint] = relationship(back_populates="fetch_runs")

@@ -8,6 +8,7 @@ Backend commands are run from `apps/api`:
 
 ```bash
 python -m pip install -e ".[dev]"
+alembic upgrade head
 pytest
 uvicorn app.main:app --reload
 ```
@@ -39,3 +40,6 @@ Create the first administrator after the API is running:
 ```bash
 docker compose exec api python -m app.bootstrap admin 'replace-this-password'
 ```
+
+Add RSS/Atom or Web collection endpoints from Source Management. The `worker` service
+collects due endpoints and makes discovered content available in the intelligence feed.

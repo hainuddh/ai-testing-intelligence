@@ -3,13 +3,12 @@ import argparse
 from sqlalchemy import select
 from sqlalchemy.orm import Session
 
-from app.database import Base, engine
+from app.database import engine
 from app.models import User
 from app.security import hash_password
 
 
 def create_admin(username: str, password: str) -> None:
-    Base.metadata.create_all(engine)
     with Session(engine) as session:
         existing = session.scalar(select(User).where(User.username == username))
         if existing:

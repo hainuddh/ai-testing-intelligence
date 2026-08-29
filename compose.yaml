@@ -42,10 +42,30 @@ services:
       ATI_DATABASE_URL: postgresql+psycopg://${POSTGRES_USER:-ati}:${POSTGRES_PASSWORD}@postgres:5432/${POSTGRES_DB:-ai_testing_intelligence}
       ATI_JWT_SECRET: ${ATI_JWT_SECRET:?Set ATI_JWT_SECRET in .env}
     depends_on:
-      postgres:
-        condition: service_healthy
+      migrate:
+        condition: service_completed_successfully
       redis:
         condition: service_healthy
+    restart: unless-stopped
+
+  migrate:
+    build: ./apps/api
+    command: ["alembic", "upgrade", "head"]
+    environment:
+      ATI_DATABASE_URL: postgresql+psycopg://${POSTGRES_USER:-ati}:${POSTGRES_PASSWORD}@postgres:5432/${POSTGRES_DB:-ai_testing_intelligence}
+    depends_on:
+      postgres:
+        condition: service_healthy
+    restart: "no"
+
+  worker:
+    build: ./apps/api
+    command: ["python", "-m", "app.worker"]
+    environment:
+      ATI_DATABASE_URL: postgresql+psycopg://${POSTGRES_USER:-ati}:${POSTGRES_PASSWORD}@postgres:5432/${POSTGRES_DB:-ai_testing_intelligence}
+    depends_on:
+      migrate:
+        condition: service_completed_successfully
     restart: unless-stopped
 
   web:

@@ -10,6 +10,8 @@ Docker Compose 会启动以下服务：
 | --- | --- | --- |
 | `web` | Nginx、前端静态资源和 API 反向代理 | `8080` |
 | `api` | FastAPI 应用 | 无 |
+| `worker` | 定时采集 RSS/Atom 和网页内容 | 无 |
+| `migrate` | 启动前执行一次数据库迁移 | 无 |
 | `postgres` | PostgreSQL 17 和 pgvector | 无 |
 | `redis` | Redis 8 | 无 |
 | `minio` | MinIO 对象存储 | 无 |
@@ -135,16 +137,16 @@ docker compose ps
 查看启动日志：
 
 ```bash
-docker compose logs --tail 200 api web postgres
+docker compose logs --tail 200 migrate api worker web postgres
 ```
 
 需要持续查看日志时：
 
 ```bash
-docker compose logs -f api web
+docker compose logs -f api worker web
 ```
 
-首次启动时，API 会使用 SQLAlchemy `create_all` 创建缺失的数据表。
+首次启动和升级时，`migrate` 服务会先执行 Alembic 数据库迁移；迁移成功后 API 和 Worker 才会启动。
 
 ## 7. 初始化管理员
 
@@ -272,7 +274,7 @@ git checkout <目标版本标签或提交哈希>
 docker compose build --pull
 docker compose up -d
 docker compose ps
-docker compose logs --tail 200 api web
+docker compose logs --tail 200 migrate api worker web
 ```
 
 更新后重新执行健康检查和登录、查询、创建信源等冒烟测试。
@@ -304,10 +306,10 @@ test -s backups/postgres.dump
 
 ### 12.2 PostgreSQL 恢复
 
-恢复会覆盖目标数据库中的对象和数据。先停止 API，避免恢复期间产生写入：
+恢复会覆盖目标数据库中的对象和数据。先停止 API 和 Worker，避免恢复期间产生写入：
 
 ```bash
-docker compose stop api
+docker compose stop api worker
 ```
 
 恢复指定备份：
@@ -319,7 +321,7 @@ docker compose exec -T postgres sh -c 'pg_restore -U "$POSTGRES_USER" -d "$POSTG
 恢复完成后启动 API 并验证：
 
 ```bash
-docker compose start api
+docker compose start api worker
 curl --fail http://127.0.0.1:8080/api/v1/health
 ```
 
@@ -392,7 +394,7 @@ ports:
 
 生产上线前应评估以下限制：
 
-- 数据库只通过 `create_all` 初始化，尚无 Alembic 等迁移机制。
+- 数据库使用 Alembic 执行版本化迁移；升级前仍应备份并检查目标版本说明。
 - 管理员初始化密码通过命令行参数传递。
 - 登录接口尚无应用级限流；公网部署应至少在边界代理或 WAF 增加限流。
 - 非 Compose 启动存在开发用 JWT 默认值；生产环境必须显式设置 `ATI_JWT_SECRET`。

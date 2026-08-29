@@ -93,6 +93,15 @@ def test_add_endpoint_to_source(client, db_session):
     assert endpoint["source_id"] == source["id"]
     assert endpoint["enabled"] is True
 
+    listed = client.get(f"/api/v1/sources/{source['id']}/endpoints", headers=headers)
+    assert listed.status_code == 200
+    assert listed.json()[0]["id"] == endpoint["id"]
+
+    deleted = client.delete(
+        f"/api/v1/sources/{source['id']}/endpoints/{endpoint['id']}", headers=headers
+    )
+    assert deleted.status_code == 204
+
 
 def test_viewer_cannot_create_source(client, db_session):
     response = client.post(
@@ -108,3 +117,94 @@ def test_viewer_cannot_create_source(client, db_session):
     )
 
     assert response.status_code == 403
+
+
+def test_source_update_rejects_null_required_field(client, db_session):
+    headers = auth_headers(db_session)
+    source = client.post(
+        "/api/v1/sources",
+        headers=headers,
+        json={
+            "name": "Required fields",
+            "source_type": "blog",
+            "languages": ["en"],
+            "topics": [],
+        },
+    ).json()
+
+    response = client.patch(
+        f"/api/v1/sources/{source['id']}", headers=headers, json={"name": None}
+    )
+
+    assert response.status_code == 422
+
+
+def test_maintainer_can_update_and_delete_source(client, db_session):
+    headers = auth_headers(db_session)
+    first = client.post(
+        "/api/v1/sources",
+        headers=headers,
+        json={
+            "name": "First source",
+            "source_type": "blog",
+            "languages": ["en"],
+        },
+    ).json()
+    client.post(
+        "/api/v1/sources",
+        headers=headers,
+        json={
+            "name": "Existing source",
+            "source_type": "blog",
+            "languages": ["en"],
+        },
+    )
+
+    updated = client.patch(
+        f"/api/v1/sources/{first['id']}",
+        headers=headers,
+        json={"description": "Updated", "trust_level": 5},
+    )
+    duplicate = client.patch(
+        f"/api/v1/sources/{first['id']}",
+        headers=headers,
+        json={"name": "Existing source"},
+    )
+    deleted = client.delete(f"/api/v1/sources/{first['id']}", headers=headers)
+    missing = client.delete(f"/api/v1/sources/{first['id']}", headers=headers)
+
+    assert updated.status_code == 200
+    assert updated.json()["description"] == "Updated"
+    assert updated.json()["trust_level"] == 5
+    assert duplicate.status_code == 409
+    assert deleted.status_code == 204
+    assert missing.status_code == 404
+
+
+def test_viewer_cannot_update_or_delete_source(client, db_session):
+    maintainer_headers = auth_headers(db_session)
+    source = client.post(
+        "/api/v1/sources",
+        headers=maintainer_headers,
+        json={
+            "name": "Protected source",
+            "source_type": "blog",
+            "languages": ["en"],
+        },
+    ).json()
+    viewer_headers = auth_headers(db_session, role="viewer")
+
+    assert (
+        client.patch(
+            f"/api/v1/sources/{source['id']}",
+            headers=viewer_headers,
+            json={"name": "No access"},
+        ).status_code
+        == 403
+    )
+    assert (
+        client.delete(
+            f"/api/v1/sources/{source['id']}", headers=viewer_headers
+        ).status_code
+        == 403
+    )

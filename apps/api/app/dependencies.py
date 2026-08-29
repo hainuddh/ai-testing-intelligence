@@ -47,3 +47,14 @@ def require_maintainer(user: CurrentUser) -> User:
 
 
 MaintainerUser = Annotated[User, Depends(require_maintainer)]
+
+
+def require_admin(user: CurrentUser) -> User:
+    if user.role != "admin":
+        raise HTTPException(
+            status_code=status.HTTP_403_FORBIDDEN, detail="Insufficient permissions"
+        )
+    return user
+
+
+AdminUser = Annotated[User, Depends(require_admin)]
