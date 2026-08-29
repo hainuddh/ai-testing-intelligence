@@ -22,6 +22,9 @@ npm run dev
 
 ## Docker
 
+For production installation, HTTPS, backup, recovery, upgrade, and troubleshooting
+instructions, see the [Chinese deployment guide](docs/deployment-zh.md).
+
 Create `.env` from `.env.example`, replace all secrets, then start the stack:
 
 ```bash
