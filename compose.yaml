@@ -71,7 +71,7 @@ services:
   web:
     build: ./apps/web
     ports:
-      - "8080:80"
+      - "127.0.0.1:8080:80"
     depends_on:
       - api
     restart: unless-stopped

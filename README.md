@@ -24,7 +24,18 @@ npm run dev
 ## Docker
 
 For production installation, HTTPS, backup, recovery, upgrade, and troubleshooting
-instructions, see the [Chinese deployment guide](docs/deployment-zh.md).
+instructions, see the [Chinese deployment guide](docs/deployment-zh.md). For the current
+server's actual domain migration, service layout, verification commands, and known risks,
+see the [Chinese go-live operations record](docs/go-live-operations-zh.md).
+
+Common maintenance commands:
+
+```bash
+./scripts/ops.sh status
+./scripts/ops.sh health
+./scripts/ops.sh restart
+./scripts/ops.sh upgrade main
+```
 
 Create `.env` from `.env.example`, replace all secrets, then start the stack:
 
