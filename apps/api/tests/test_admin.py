@@ -1,3 +1,4 @@
+from app.bootstrap import reset_password
 from app.models import ContentItem, Source, SourceEndpoint, User
 from app.security import create_access_token, hash_password, verify_password
 
@@ -141,3 +142,18 @@ def test_database_status_returns_only_safe_counts(client, db_session):
             "fetch_runs": 0,
         },
     }
+
+
+def test_reset_password_reactivates_user(db_session, monkeypatch):
+    user, _ = add_user(db_session, "locked-admin", role="admin", active=False)
+    old_hash = user.password_hash
+    monkeypatch.setattr("app.bootstrap.engine", db_session.get_bind())
+
+    reset_password("locked-admin", "new-secure-password")
+
+    db_session.expire_all()
+    updated = db_session.get(User, user.id)
+    assert updated is not None
+    assert updated.is_active is True
+    assert updated.password_hash != old_hash
+    assert verify_password("new-secure-password", updated.password_hash)

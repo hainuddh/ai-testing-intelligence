@@ -377,7 +377,7 @@ export default function App() {
         {tab === 'database' && isAdmin && <DatabaseView data={database} loading={loading} />}
       </section>
       <SourceDrawer open={sourceDrawer} editing={editingSource} form={sourceForm} saving={saving} onClose={() => setSourceDrawer(false)} onSave={saveSource} />
-      <UserDrawer open={userDrawer} editing={editingUser} form={userForm} saving={saving} onClose={() => setUserDrawer(false)} onSave={saveUser} />
+      <UserDrawer open={userDrawer} editing={editingUser} form={userForm} saving={saving} error={error} onClose={() => setUserDrawer(false)} onSave={saveUser} />
       <EndpointDrawer open={endpointDrawer} source={endpointSource} endpoints={endpoints} form={endpointForm} saving={saving} canManage={canManageSources} onClose={() => setEndpointDrawer(false)} onSave={saveEndpoint} onDelete={removeEndpoint} />
     </main>
   )
@@ -471,12 +471,13 @@ function SourceDrawer({ open, editing, form, saving, onClose, onSave }: { open: 
   </Drawer>
 }
 
-function UserDrawer({ open, editing, form, saving, onClose, onSave }: { open: boolean; editing: User | null; form: FormInstance<UserForm>; saving: boolean; onClose: () => void; onSave: (values: UserForm) => void }) {
+function UserDrawer({ open, editing, form, saving, error, onClose, onSave }: { open: boolean; editing: User | null; form: FormInstance<UserForm>; saving: boolean; error: string; onClose: () => void; onSave: (values: UserForm) => void }) {
   return <Drawer title={<><span className="drawer-kicker">ACCESS PROFILE</span><strong>{editing ? '编辑用户' : '新增用户'}</strong></>} open={open} onClose={onClose} destroyOnHidden>
     <p className="drawer-copy">配置账号身份及其可访问的雷达扇区。</p>
+    {error && <Alert className="drawer-alert" type="error" message={error} showIcon />}
     <Form form={form} layout="vertical" requiredMark={false} onFinish={onSave}>
       <Form.Item label="用户名" name="username" rules={[{ required: true, message: '请输入用户名' }]}><Input /></Form.Item>
-      <Form.Item label={editing ? '新密码（留空则不修改）' : '初始密码'} name="password" rules={editing ? [] : [{ required: true, message: '请输入初始密码' }]}><Input.Password autoComplete="new-password" /></Form.Item>
+      <Form.Item label={editing ? '新密码（留空则不修改）' : '初始密码'} name="password" rules={[...(editing ? [] : [{ required: true, message: '请输入初始密码' }]), { min: 8, message: '密码至少需要 8 个字符' }]}><Input.Password autoComplete="new-password" /></Form.Item>
       <Form.Item label="角色" name="role" rules={[{ required: true }]}><Select options={Object.entries(roleLabels).map(([value, label]) => ({ value, label }))} /></Form.Item>
       <Form.Item label="账号状态" name="is_active" valuePropName="checked"><Switch checkedChildren="启用" unCheckedChildren="停用" /></Form.Item>
       <Button htmlType="submit" type="primary" size="large" block loading={saving}>{editing ? '保存修改' : '创建用户'}</Button>
