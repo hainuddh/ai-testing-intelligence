@@ -4,6 +4,7 @@ import socket
 import time
 from dataclasses import dataclass
 from datetime import UTC, datetime
+from email.utils import parsedate_to_datetime
 from html.parser import HTMLParser
 from urllib.parse import urljoin, urlparse
 from xml.etree import ElementTree
@@ -137,7 +138,11 @@ def parse_date(value: str | None) -> datetime | None:
         parsed = datetime.fromisoformat(normalized)
         return parsed.replace(tzinfo=parsed.tzinfo or UTC)
     except ValueError:
-        return None
+        try:
+            parsed = parsedate_to_datetime(value)
+            return parsed.replace(tzinfo=parsed.tzinfo or UTC)
+        except (TypeError, ValueError):
+            return None
 
 
 def parse_feed(data: bytes, base_url: str, limit: int) -> list[FetchedItem]:
@@ -157,7 +162,9 @@ def parse_feed(data: bytes, base_url: str, limit: int) -> list[FetchedItem]:
                 title=title[:500],
                 url=urljoin(base_url, link),
                 summary=child_text(entry, "summary", "description", "content"),
-                published_at=parse_date(child_text(entry, "published", "updated")),
+                published_at=parse_date(
+                    child_text(entry, "published", "updated", "pubdate")
+                ),
             )
         )
     return items

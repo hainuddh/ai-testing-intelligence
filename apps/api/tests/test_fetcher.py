@@ -51,6 +51,17 @@ def test_parse_rss_and_web_content():
     assert "Useful body" in (page[0].body or "")
 
 
+def test_parse_rss_publication_date():
+    feed = b"""<rss><channel><item><title>Dated article</title>
+    <link>https://example.com/dated</link>
+    <pubDate>Wed, 26 Aug 2026 19:00:00 +0000</pubDate></item></channel></rss>"""
+
+    item = parse_feed(feed, "https://example.com/feed.xml", 10)[0]
+
+    assert item.published_at is not None
+    assert item.published_at.isoformat() == "2026-08-26T19:00:00+00:00"
+
+
 def test_private_endpoint_is_rejected():
     with patch("app.fetcher.socket.getaddrinfo", return_value=[(2, 1, 6, "", ("127.0.0.1", 80))]):
         with pytest.raises(ValueError, match="non-public"):

@@ -54,3 +54,14 @@ docker compose exec api python -m app.bootstrap admin 'replace-this-password'
 
 Add RSS/Atom or Web collection endpoints from Source Management. The `worker` service
 collects due endpoints and makes discovered content available in the intelligence feed.
+
+Add a small, idempotent set of real AI news feeds after creating the administrator:
+
+```bash
+docker compose exec api python -m app.seed_sources --username admin
+docker compose restart worker
+docker compose logs -f worker
+```
+
+The command only creates missing sample sources and endpoints. It does not insert fake
+articles; the worker collects current entries from the configured publishers.

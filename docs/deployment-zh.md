@@ -160,6 +160,21 @@ docker compose exec api python -m app.bootstrap admin '<管理员密码>'
 
 如果用户名已经存在，命令会报告 `User '...' already exists`，不会覆盖原用户。
 
+### 7.1 添加 AI 资讯示例信源
+
+可选执行以下命令，添加一组真实且可重复初始化的 AI 资讯订阅源：
+
+```bash
+docker compose exec api python -m app.seed_sources --username admin
+docker compose restart worker
+docker compose logs -f worker
+```
+
+默认包含 OpenAI News、Google AI、Google DeepMind、MIT Technology Review AI 和
+Machine Learning Mastery。命令只创建缺失的信源和 RSS/Atom 端点，重复执行不会
+重复添加，也不会插入伪造文章。Worker 完成首次采集后，真实订阅内容会显示在
+“内容情报”页面。若管理员用户名不是 `admin`，请替换 `--username` 的值。
+
 ## 8. 验证部署
 
 检查健康接口：
