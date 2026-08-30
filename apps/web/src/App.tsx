@@ -71,6 +71,10 @@ const roleLabels: Record<Role, string> = { viewer: '浏览者', maintainer: '维
 const splitValues = (value: string) => value.split(/[,，]/).map((item) => item.trim()).filter(Boolean)
 const list = <T,>(data: T[] | { items: T[] }) => Array.isArray(data) ? data : data.items
 const dateText = (value: string | null) => value ? new Intl.DateTimeFormat('zh-CN', { dateStyle: 'medium' }).format(new Date(value)) : '时间未知'
+const dateBoundary = (value: string, endOfDay = false) => {
+  const [year, month, day] = value.split('-').map(Number)
+  return new Date(year, month - 1, day, endOfDay ? 23 : 0, endOfDay ? 59 : 0, endOfDay ? 59 : 0, endOfDay ? 999 : 0).toISOString()
+}
 
 export default function App() {
   const [token, setToken] = useState(() => localStorage.getItem('access_token'))
@@ -82,6 +86,8 @@ export default function App() {
   const [contentTotal, setContentTotal] = useState(0)
   const [contentPage, setContentPage] = useState(1)
   const [query, setQuery] = useState('')
+  const [startDate, setStartDate] = useState('')
+  const [endDate, setEndDate] = useState('')
   const [users, setUsers] = useState<User[]>([])
   const [database, setDatabase] = useState<DatabaseCounts | null>(null)
   const [loading, setLoading] = useState(false)
@@ -139,12 +145,14 @@ export default function App() {
     return () => { active = false }
   }, [token])
 
-  const loadContent = async (page = contentPage, search = query) => {
+  const loadContent = async (page = contentPage, search = query, start = startDate, end = endDate) => {
     setLoading(true)
     setError('')
     try {
       const params = new URLSearchParams({ offset: String((page - 1) * 12), limit: '12' })
       if (search) params.set('query', search)
+      if (start) params.set('start_at', dateBoundary(start))
+      if (end) params.set('end_at', dateBoundary(end, true))
       const data = await request<{ items: ContentItem[]; total: number }>(`/api/v1/content?${params}`)
       setContent(data.items)
       setContentTotal(data.total)
@@ -363,7 +371,7 @@ export default function App() {
       </nav>
       <section className="dashboard-content">
         {error && <Alert className="dashboard-alert" type="error" message={error} showIcon closable onClose={() => setError('')} />}
-        {tab === 'content' && <ContentView items={content} total={contentTotal} page={contentPage} loading={loading} query={query} onQuery={setQuery} onSearch={() => { setContentPage(1); void loadContent(1, query) }} onPage={(page) => { setContentPage(page); void loadContent(page) }} />}
+        {tab === 'content' && <ContentView items={content} total={contentTotal} page={contentPage} loading={loading} query={query} startDate={startDate} endDate={endDate} onQuery={setQuery} onStartDate={setStartDate} onEndDate={setEndDate} onSearch={() => { setContentPage(1); void loadContent(1, query) }} onReset={() => { setQuery(''); setStartDate(''); setEndDate(''); setContentPage(1); void loadContent(1, '', '', '') }} onPage={(page) => { setContentPage(page); void loadContent(page) }} />}
         {tab === 'sources' && <SourcesView sources={sources} total={sourceTotal} loading={loading} canManage={canManageSources} onAdd={() => openSource()} onEndpoints={(source) => void openEndpoints(source)} onEdit={openSource} onDelete={(source) => Modal.confirm({ title: `删除信源「${source.name}」？`, content: '删除后无法恢复，并会清除关联内容。', okText: '确认删除', cancelText: '取消', okButtonProps: { danger: true }, onOk: () => removeSource(source) })} />}
         {tab === 'users' && isAdmin && <UsersView users={users} loading={loading} me={me} onAdd={() => openUser()} onEdit={openUser} onDelete={(user) => Modal.confirm({ title: `删除用户「${user.username}」？`, content: '该用户将立即失去访问权限。', okText: '确认删除', cancelText: '取消', okButtonProps: { danger: true }, onOk: () => removeUser(user) })} />}
         {tab === 'database' && isAdmin && <DatabaseView data={database} loading={loading} />}
@@ -398,10 +406,14 @@ function PageIntro({ kicker, title, copy, action }: { kicker: string; title: str
   return <div className="page-intro"><div><span className="eyebrow">{kicker}</span><h1>{title}</h1><p>{copy}</p></div>{action}</div>
 }
 
-function ContentView({ items, total, page, loading, query, onQuery, onSearch, onPage }: { items: ContentItem[]; total: number; page: number; loading: boolean; query: string; onQuery: (value: string) => void; onSearch: () => void; onPage: (page: number) => void }) {
+function ContentView({ items, total, page, loading, query, startDate, endDate, onQuery, onStartDate, onEndDate, onSearch, onReset, onPage }: { items: ContentItem[]; total: number; page: number; loading: boolean; query: string; startDate: string; endDate: string; onQuery: (value: string) => void; onStartDate: (value: string) => void; onEndDate: (value: string) => void; onSearch: () => void; onReset: () => void; onPage: (page: number) => void }) {
   return <>
     <PageIntro kicker="INTELLIGENCE FEED / LIVE" title="内容情报" copy="聚合监听网络中的最新信号，快速定位值得跟进的变化。" />
-    <div className="feed-tools"><Input.Search value={query} onChange={(event) => onQuery(event.target.value)} onSearch={onSearch} enterButton="检索" placeholder="检索标题、摘要或正文" aria-label="检索内容" /><span>{total} 条情报</span></div>
+    <div className="feed-tools">
+      <Input.Search value={query} onChange={(event) => onQuery(event.target.value)} onSearch={onSearch} enterButton="检索" placeholder="检索标题、摘要或正文" aria-label="检索内容" />
+      <div className="date-filter"><label>开始日期<input type="date" value={startDate} max={endDate || undefined} onChange={(event) => onStartDate(event.target.value)} /></label><i>至</i><label>结束日期<input type="date" value={endDate} min={startDate || undefined} onChange={(event) => onEndDate(event.target.value)} /></label><Button onClick={onSearch}>应用筛选</Button>{(query || startDate || endDate) && <Button type="text" onClick={onReset}>重置</Button>}</div>
+      <span>{total} 条情报</span>
+    </div>
     {loading ? <Loading text="正在扫描情报流..." /> : items.length === 0 ? <Empty icon={<FileSearchOutlined />} title="当前扇区没有匹配的情报。" /> : <>
       <div className="content-grid">{items.map((item) => <article className="content-card" key={item.id}>
         <div className="content-meta"><span>{dateText(item.published_at || item.fetched_at)}</span><span>SOURCE / {item.source_id}</span></div>
