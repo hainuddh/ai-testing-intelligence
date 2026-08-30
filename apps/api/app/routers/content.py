@@ -1,3 +1,6 @@
+from datetime import datetime
+from typing import Annotated
+
 from fastapi import APIRouter, HTTPException, Query, status
 from sqlalchemy import func, or_, select
 
@@ -16,7 +19,14 @@ def list_content(
     limit: int = Query(default=50, ge=1, le=200),
     source_id: int | None = Query(default=None, ge=1),
     query: str | None = Query(default=None, min_length=1, max_length=200),
+    start_at: Annotated[datetime | None, Query()] = None,
+    end_at: Annotated[datetime | None, Query()] = None,
 ) -> ContentListResponse:
+    if start_at is not None and end_at is not None and start_at > end_at:
+        raise HTTPException(
+            status_code=status.HTTP_422_UNPROCESSABLE_CONTENT,
+            detail="start_at must be before or equal to end_at",
+        )
     filters = []
     if source_id is not None:
         filters.append(ContentItem.source_id == source_id)
@@ -29,6 +39,11 @@ def list_content(
                 ContentItem.body.ilike(pattern),
             )
         )
+    effective_at = func.coalesce(ContentItem.published_at, ContentItem.fetched_at)
+    if start_at is not None:
+        filters.append(effective_at >= start_at)
+    if end_at is not None:
+        filters.append(effective_at <= end_at)
     total = db.scalar(select(func.count()).select_from(ContentItem).where(*filters)) or 0
     items = list(
         db.scalars(

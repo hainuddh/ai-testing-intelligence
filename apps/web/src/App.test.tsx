@@ -1,4 +1,4 @@
-import { render, screen, waitFor } from '@testing-library/react'
+import { fireEvent, render, screen, waitFor } from '@testing-library/react'
 import userEvent from '@testing-library/user-event'
 import { beforeEach, describe, expect, it, vi } from 'vitest'
 import App from './App'
@@ -48,7 +48,7 @@ describe('management radar workflow', () => {
     expect(screen.queryByRole('button', { name: '用户管理' })).not.toBeInTheDocument()
   })
 
-  it('loads content and sends a query through the intelligence search', async () => {
+  it('filters intelligence by query and date range', async () => {
     localStorage.setItem('access_token', 'existing-token')
     const item = {
       id: 'content-1', source_id: 'source-1', title: 'Agents gain new tools', url: 'https://example.com/agents',
@@ -56,6 +56,7 @@ describe('management radar workflow', () => {
     }
     const fetchMock = vi.spyOn(globalThis, 'fetch')
       .mockResolvedValueOnce(json({ id: 'user-1', username: 'reader', role: 'viewer' }))
+      .mockResolvedValueOnce(json({ items: [item], total: 1 }))
       .mockResolvedValueOnce(json({ items: [item], total: 1 }))
       .mockResolvedValueOnce(json({ items: [item], total: 1 }))
 
@@ -69,6 +70,17 @@ describe('management radar workflow', () => {
       '/api/v1/content?offset=0&limit=12&query=agents',
       expect.objectContaining({ headers: expect.objectContaining({ Authorization: 'Bearer existing-token' }) }),
     ))
+
+    fireEvent.change(screen.getByLabelText('开始日期'), { target: { value: '2026-08-01' } })
+    fireEvent.change(screen.getByLabelText('结束日期'), { target: { value: '2026-08-31' } })
+    await userEvent.click(screen.getByRole('button', { name: '应用筛选' }))
+
+    await waitFor(() => {
+      const path = String(fetchMock.mock.calls.at(-1)?.[0])
+      expect(path).toContain('query=agents')
+      expect(path).toContain('start_at=')
+      expect(path).toContain('end_at=')
+    })
   })
 
   it('allows a maintainer to create a source', async () => {

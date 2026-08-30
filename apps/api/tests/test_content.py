@@ -1,3 +1,5 @@
+from datetime import UTC, datetime
+
 from app.models import ContentItem, Source, User
 from app.security import create_access_token, hash_password
 
@@ -42,6 +44,7 @@ def test_list_filter_and_get_content(client, db_session):
         title="Reliable agent testing",
         url="https://example.com/agent-testing",
         summary="A practical guide",
+        published_at=datetime(2026, 8, 20, tzinfo=UTC),
     )
     db_session.add_all(
         [
@@ -69,3 +72,17 @@ def test_list_filter_and_get_content(client, db_session):
     assert detail.status_code == 200
     assert detail.json()["source_id"] == first_source.id
     assert client.get("/api/v1/content/9999", headers=headers).status_code == 404
+
+    ranged = client.get(
+        "/api/v1/content?start_at=2026-08-19T00:00:00Z&end_at=2026-08-21T00:00:00Z",
+        headers=headers,
+    )
+    invalid_range = client.get(
+        "/api/v1/content?start_at=2026-08-22T00:00:00Z&end_at=2026-08-21T00:00:00Z",
+        headers=headers,
+    )
+
+    assert ranged.status_code == 200
+    assert ranged.json()["total"] == 1
+    assert ranged.json()["items"][0]["id"] == matching.id
+    assert invalid_range.status_code == 422
