@@ -41,6 +41,7 @@ services:
     environment:
       ATI_DATABASE_URL: postgresql+psycopg://${POSTGRES_USER:-ati}:${POSTGRES_PASSWORD}@postgres:5432/${POSTGRES_DB:-ai_testing_intelligence}
       ATI_JWT_SECRET: ${ATI_JWT_SECRET:?Set ATI_JWT_SECRET in .env}
+      ATI_TESTING_RELEVANCE_THRESHOLD: ${ATI_TESTING_RELEVANCE_THRESHOLD:-60}
     depends_on:
       migrate:
         condition: service_completed_successfully
@@ -63,6 +64,12 @@ services:
     command: ["python", "-m", "app.worker"]
     environment:
       ATI_DATABASE_URL: postgresql+psycopg://${POSTGRES_USER:-ati}:${POSTGRES_PASSWORD}@postgres:5432/${POSTGRES_DB:-ai_testing_intelligence}
+      ATI_ANALYSIS_API_BASE_URL: ${ATI_ANALYSIS_API_BASE_URL:-}
+      ATI_ANALYSIS_API_KEY: ${ATI_ANALYSIS_API_KEY:-}
+      ATI_ANALYSIS_MODEL: ${ATI_ANALYSIS_MODEL:-}
+      ATI_ANALYSIS_BATCH_SIZE: ${ATI_ANALYSIS_BATCH_SIZE:-10}
+      ATI_TESTING_RELEVANCE_THRESHOLD: ${ATI_TESTING_RELEVANCE_THRESHOLD:-60}
+      ATI_ANALYSIS_FETCH_FULL_CONTENT: ${ATI_ANALYSIS_FETCH_FULL_CONTENT:-false}
     depends_on:
       migrate:
         condition: service_completed_successfully

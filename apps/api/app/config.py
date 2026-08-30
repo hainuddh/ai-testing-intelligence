@@ -12,6 +12,12 @@ class Settings(BaseSettings):
     worker_poll_seconds: int = 60
     fetch_timeout_seconds: int = 20
     fetch_max_bytes: int = 5_000_000
+    analysis_api_base_url: str = ""
+    analysis_api_key: str = ""
+    analysis_model: str = ""
+    analysis_batch_size: int = 10
+    testing_relevance_threshold: int = 60
+    analysis_fetch_full_content: bool = False
 
     model_config = SettingsConfigDict(env_file=".env", env_prefix="ATI_", extra="ignore")
 

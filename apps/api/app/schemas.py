@@ -121,12 +121,23 @@ class ContentItemResponse(BaseModel):
 
     id: int
     source_id: int
+    source_name: str
     title: str
     url: str
     summary: str | None
-    body: str | None
     published_at: datetime | None
     fetched_at: datetime
+    analysis_status: str
+    testing_relevance_score: int | None
+    testing_value_score: int | None
+    analysis_summary: str | None
+    testing_value_analysis: str | None
+    applicable_scenarios: list[str]
+    adoption_suggestions: list[str]
+    analysis_risks: list[str]
+    analysis_tags: list[str]
+    analysis_model: str | None
+    analyzed_at: datetime | None
 
 
 class ContentListResponse(BaseModel):

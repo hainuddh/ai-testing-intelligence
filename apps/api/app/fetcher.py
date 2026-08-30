@@ -201,6 +201,10 @@ def fetch_endpoint(db: Session, endpoint: SourceEndpoint) -> FetchRun:
                     existing.summary = item.summary
                     existing.body = item.body
                     existing.fetched_at = datetime.now(UTC)
+                    existing.analysis_status = "pending"
+                    existing.analysis_attempts = 0
+                    existing.analysis_error = None
+                    existing.next_analysis_at = None
                 continue
             db.add(
                 ContentItem(

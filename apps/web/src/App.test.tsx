@@ -51,8 +51,12 @@ describe('management radar workflow', () => {
   it('filters intelligence by query and date range', async () => {
     localStorage.setItem('access_token', 'existing-token')
     const item = {
-      id: 'content-1', source_id: 'source-1', title: 'Agents gain new tools', url: 'https://example.com/agents',
-      summary: 'A concise intelligence summary', body: '', published_at: '2026-08-20T00:00:00Z', fetched_at: '2026-08-21T00:00:00Z',
+      id: 'content-1', source_id: 'source-1', source_name: 'Testing Lab', title: 'Agents gain new tools', url: 'https://example.com/agents',
+      summary: 'Original summary', body: '', published_at: '2026-08-20T00:00:00Z', fetched_at: '2026-08-21T00:00:00Z',
+      analysis_status: 'analyzed', testing_relevance_score: 88, testing_value_score: 92,
+      analysis_summary: 'A concise testing intelligence summary', testing_value_analysis: 'Useful for autonomous regression testing.',
+      applicable_scenarios: ['Regression testing'], adoption_suggestions: ['Start with a controlled pilot'],
+      analysis_risks: ['False positives'], analysis_tags: ['AI Agent', 'Testing'], analysis_model: 'test-model', analyzed_at: '2026-08-21T01:00:00Z',
     }
     const fetchMock = vi.spyOn(globalThis, 'fetch')
       .mockResolvedValueOnce(json({ id: 'user-1', username: 'reader', role: 'viewer' }))
@@ -67,7 +71,7 @@ describe('management radar workflow', () => {
     await userEvent.type(search, '{Enter}')
 
     await waitFor(() => expect(fetchMock).toHaveBeenLastCalledWith(
-      '/api/v1/content?offset=0&limit=12&query=agents',
+      '/api/v1/content?offset=0&limit=12&query=agents&min_value_score=60',
       expect.objectContaining({ headers: expect.objectContaining({ Authorization: 'Bearer existing-token' }) }),
     ))
 
@@ -81,6 +85,11 @@ describe('management radar workflow', () => {
       expect(path).toContain('start_at=')
       expect(path).toContain('end_at=')
     })
+
+    await userEvent.click(screen.getByRole('button', { name: /Agents gain new tools/ }))
+    expect(await screen.findByText('测试价值分析')).toBeInTheDocument()
+    expect(screen.getByText('Useful for autonomous regression testing.')).toBeInTheDocument()
+    expect(screen.getByRole('link', { name: /查看原文/ })).toHaveAttribute('href', item.url)
   })
 
   it('allows a maintainer to create a source', async () => {

@@ -42,12 +42,23 @@ type SourceForm = Omit<Source, 'id' | 'languages' | 'topics'> & { languages: str
 type ContentItem = {
   id: string
   source_id: string
+  source_name: string
   title: string
   url: string
   summary: string
-  body: string
   published_at: string | null
   fetched_at: string
+  analysis_status: string
+  testing_relevance_score: number | null
+  testing_value_score: number | null
+  analysis_summary: string | null
+  testing_value_analysis: string | null
+  applicable_scenarios: string[]
+  adoption_suggestions: string[]
+  analysis_risks: string[]
+  analysis_tags: string[]
+  analysis_model: string | null
+  analyzed_at: string | null
 }
 type Endpoint = {
   id: string
@@ -88,6 +99,8 @@ export default function App() {
   const [query, setQuery] = useState('')
   const [startDate, setStartDate] = useState('')
   const [endDate, setEndDate] = useState('')
+  const [minValueScore, setMinValueScore] = useState(60)
+  const [selectedContent, setSelectedContent] = useState<ContentItem | null>(null)
   const [users, setUsers] = useState<User[]>([])
   const [database, setDatabase] = useState<DatabaseCounts | null>(null)
   const [loading, setLoading] = useState(false)
@@ -145,7 +158,7 @@ export default function App() {
     return () => { active = false }
   }, [token])
 
-  const loadContent = async (page = contentPage, search = query, start = startDate, end = endDate) => {
+  const loadContent = async (page = contentPage, search = query, start = startDate, end = endDate, valueScore = minValueScore) => {
     setLoading(true)
     setError('')
     try {
@@ -153,6 +166,7 @@ export default function App() {
       if (search) params.set('query', search)
       if (start) params.set('start_at', dateBoundary(start))
       if (end) params.set('end_at', dateBoundary(end, true))
+      if (valueScore) params.set('min_value_score', String(valueScore))
       const data = await request<{ items: ContentItem[]; total: number }>(`/api/v1/content?${params}`)
       setContent(data.items)
       setContentTotal(data.total)
@@ -371,7 +385,7 @@ export default function App() {
       </nav>
       <section className="dashboard-content">
         {error && <Alert className="dashboard-alert" type="error" message={error} showIcon closable onClose={() => setError('')} />}
-        {tab === 'content' && <ContentView items={content} total={contentTotal} page={contentPage} loading={loading} query={query} startDate={startDate} endDate={endDate} onQuery={setQuery} onStartDate={setStartDate} onEndDate={setEndDate} onSearch={() => { setContentPage(1); void loadContent(1, query) }} onReset={() => { setQuery(''); setStartDate(''); setEndDate(''); setContentPage(1); void loadContent(1, '', '', '') }} onPage={(page) => { setContentPage(page); void loadContent(page) }} />}
+        {tab === 'content' && <ContentView items={content} total={contentTotal} page={contentPage} loading={loading} query={query} startDate={startDate} endDate={endDate} minValueScore={minValueScore} onQuery={setQuery} onStartDate={setStartDate} onEndDate={setEndDate} onMinValueScore={setMinValueScore} onOpen={setSelectedContent} onSearch={() => { setContentPage(1); void loadContent(1, query) }} onReset={() => { setQuery(''); setStartDate(''); setEndDate(''); setMinValueScore(60); setContentPage(1); void loadContent(1, '', '', '', 60) }} onPage={(page) => { setContentPage(page); void loadContent(page) }} />}
         {tab === 'sources' && <SourcesView sources={sources} total={sourceTotal} loading={loading} canManage={canManageSources} onAdd={() => openSource()} onEndpoints={(source) => void openEndpoints(source)} onEdit={openSource} onDelete={(source) => Modal.confirm({ title: `删除信源「${source.name}」？`, content: '删除后无法恢复，并会清除关联内容。', okText: '确认删除', cancelText: '取消', okButtonProps: { danger: true }, onOk: () => removeSource(source) })} />}
         {tab === 'users' && isAdmin && <UsersView users={users} loading={loading} me={me} onAdd={() => openUser()} onEdit={openUser} onDelete={(user) => Modal.confirm({ title: `删除用户「${user.username}」？`, content: '该用户将立即失去访问权限。', okText: '确认删除', cancelText: '取消', okButtonProps: { danger: true }, onOk: () => removeUser(user) })} />}
         {tab === 'database' && isAdmin && <DatabaseView data={database} loading={loading} />}
@@ -379,6 +393,7 @@ export default function App() {
       <SourceDrawer open={sourceDrawer} editing={editingSource} form={sourceForm} saving={saving} onClose={() => setSourceDrawer(false)} onSave={saveSource} />
       <UserDrawer open={userDrawer} editing={editingUser} form={userForm} saving={saving} error={error} onClose={() => setUserDrawer(false)} onSave={saveUser} />
       <EndpointDrawer open={endpointDrawer} source={endpointSource} endpoints={endpoints} form={endpointForm} saving={saving} canManage={canManageSources} onClose={() => setEndpointDrawer(false)} onSave={saveEndpoint} onDelete={removeEndpoint} />
+      <IntelligenceModal item={selectedContent} onClose={() => setSelectedContent(null)} />
     </main>
   )
 }
@@ -406,23 +421,40 @@ function PageIntro({ kicker, title, copy, action }: { kicker: string; title: str
   return <div className="page-intro"><div><span className="eyebrow">{kicker}</span><h1>{title}</h1><p>{copy}</p></div>{action}</div>
 }
 
-function ContentView({ items, total, page, loading, query, startDate, endDate, onQuery, onStartDate, onEndDate, onSearch, onReset, onPage }: { items: ContentItem[]; total: number; page: number; loading: boolean; query: string; startDate: string; endDate: string; onQuery: (value: string) => void; onStartDate: (value: string) => void; onEndDate: (value: string) => void; onSearch: () => void; onReset: () => void; onPage: (page: number) => void }) {
+function ContentView({ items, total, page, loading, query, startDate, endDate, minValueScore, onQuery, onStartDate, onEndDate, onMinValueScore, onOpen, onSearch, onReset, onPage }: { items: ContentItem[]; total: number; page: number; loading: boolean; query: string; startDate: string; endDate: string; minValueScore: number; onQuery: (value: string) => void; onStartDate: (value: string) => void; onEndDate: (value: string) => void; onMinValueScore: (value: number) => void; onOpen: (item: ContentItem) => void; onSearch: () => void; onReset: () => void; onPage: (page: number) => void }) {
   return <>
     <PageIntro kicker="INTELLIGENCE FEED / LIVE" title="内容情报" copy="聚合监听网络中的最新信号，快速定位值得跟进的变化。" />
     <div className="feed-tools">
       <Input.Search value={query} onChange={(event) => onQuery(event.target.value)} onSearch={onSearch} enterButton="检索" placeholder="检索标题、摘要或正文" aria-label="检索内容" />
-      <div className="date-filter"><label>开始日期<input type="date" value={startDate} max={endDate || undefined} onChange={(event) => onStartDate(event.target.value)} /></label><i>至</i><label>结束日期<input type="date" value={endDate} min={startDate || undefined} onChange={(event) => onEndDate(event.target.value)} /></label><Button onClick={onSearch}>应用筛选</Button>{(query || startDate || endDate) && <Button type="text" onClick={onReset}>重置</Button>}</div>
+      <div className="date-filter"><label>开始日期<input type="date" value={startDate} max={endDate || undefined} onChange={(event) => onStartDate(event.target.value)} /></label><i>至</i><label>结束日期<input type="date" value={endDate} min={startDate || undefined} onChange={(event) => onEndDate(event.target.value)} /></label><label>最低价值<Select value={minValueScore} onChange={onMinValueScore} options={[{ value: 40, label: '观察 40+' }, { value: 60, label: '推荐 60+' }, { value: 80, label: '高价值 80+' }]} /></label><Button onClick={onSearch}>应用筛选</Button>{(query || startDate || endDate || minValueScore !== 60) && <Button type="text" onClick={onReset}>重置</Button>}</div>
       <span>{total} 条情报</span>
     </div>
     {loading ? <Loading text="正在扫描情报流..." /> : items.length === 0 ? <Empty icon={<FileSearchOutlined />} title="当前扇区没有匹配的情报。" /> : <>
-      <div className="content-grid">{items.map((item) => <article className="content-card" key={item.id}>
-        <div className="content-meta"><span>{dateText(item.published_at || item.fetched_at)}</span><span>SOURCE / {item.source_id}</span></div>
-        <h2><a href={item.url} target="_blank" rel="noreferrer">{item.title}</a></h2>
-        <p>{item.summary || item.body || '暂无摘要'}</p><a className="read-link" href={item.url} target="_blank" rel="noreferrer">查看原文 <ArrowRightOutlined /></a>
+      <div className="content-grid">{items.map((item) => <article className="content-card" key={item.id} onClick={() => onOpen(item)} onKeyDown={(event) => { if (event.key === 'Enter' || event.key === ' ') onOpen(item) }} role="button" tabIndex={0}>
+        <div className="content-meta"><span>{dateText(item.published_at || item.fetched_at)}</span><span>{item.source_name}</span></div>
+        <div className="score-line"><Tag color="green">测试相关 {item.testing_relevance_score ?? 0}</Tag><Tag color={(item.testing_value_score ?? 0) >= 80 ? 'gold' : 'blue'}>测试价值 {item.testing_value_score ?? 0}</Tag></div>
+        <h2>{item.title}</h2>
+        <p>{item.analysis_summary || '等待测试价值摘要'}</p><span className="read-link">查看测试情报 <ArrowRightOutlined /></span>
       </article>)}</div>
       {total > 12 && <Pagination className="radar-pagination" current={page} total={total} pageSize={12} showSizeChanger={false} onChange={onPage} />}
     </>}
   </>
+}
+
+function IntelligenceModal({ item, onClose }: { item: ContentItem | null; onClose: () => void }) {
+  if (!item) return null
+  const Section = ({ title, text, values }: { title: string; text?: string | null; values?: string[] }) => <section className="intel-section"><h3>{title}</h3>{text && <p>{text}</p>}{values && (values.length ? <ul>{values.map((value) => <li key={value}>{value}</li>)}</ul> : <p>暂无</p>)}</section>
+  return <Modal className="intel-modal" width={900} open title={null} footer={null} onCancel={onClose}>
+    <div className="intel-kicker">TESTING INTELLIGENCE / SCORE {item.testing_value_score ?? 0}</div>
+    <h2>{item.title}</h2>
+    <div className="intel-meta"><span>{item.source_name}</span><span>{dateText(item.published_at || item.fetched_at)}</span><Tag color="green">相关性 {item.testing_relevance_score ?? 0}</Tag><Tag color="gold">价值 {item.testing_value_score ?? 0}</Tag></div>
+    <Section title="情报摘要" text={item.analysis_summary} />
+    <Section title="测试价值分析" text={item.testing_value_analysis} />
+    <div className="intel-columns"><Section title="适用测试场景" values={item.applicable_scenarios} /><Section title="落地验证建议" values={item.adoption_suggestions} /></div>
+    <Section title="风险与边界" values={item.analysis_risks} />
+    <div className="intel-tags">{item.analysis_tags.map((tag) => <Tag key={tag}>{tag}</Tag>)}</div>
+    <a className="original-link" href={item.url} target="_blank" rel="noreferrer">查看原文（外部链接） <ArrowRightOutlined /></a>
+  </Modal>
 }
 
 function SourcesView({ sources, total, loading, canManage, onAdd, onEndpoints, onEdit, onDelete }: { sources: Source[]; total: number; loading: boolean; canManage: boolean; onAdd: () => void; onEndpoints: (source: Source) => void; onEdit: (source: Source) => void; onDelete: (source: Source) => void }) {

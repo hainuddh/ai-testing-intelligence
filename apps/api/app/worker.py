@@ -5,6 +5,7 @@ from datetime import UTC, datetime, timedelta
 from sqlalchemy import func, select, text
 from sqlalchemy.orm import Session
 
+from app.analyzer import analyze_pending
 from app.config import settings
 from app.database import engine
 from app.fetcher import fetch_endpoint
@@ -50,6 +51,10 @@ def run_once() -> None:
                 except Exception:
                     db.rollback()
                     logger.exception("Unhandled fetch failure endpoint_id=%s", endpoint.id)
+        with Session(engine) as db:
+            analyzed, failed = analyze_pending(db)
+            if analyzed or failed:
+                logger.info("Analyzed content succeeded=%s failed=%s", analyzed, failed)
         return
 
     with engine.connect() as lock_connection:
@@ -71,6 +76,10 @@ def run_once() -> None:
                         logger.exception("Unhandled fetch failure endpoint_id=%s", endpoint.id)
         finally:
             lock_connection.execute(text("SELECT pg_advisory_unlock(82429101)"))
+    with Session(engine) as db:
+        analyzed, failed = analyze_pending(db)
+        if analyzed or failed:
+            logger.info("Analyzed content succeeded=%s failed=%s", analyzed, failed)
 
 
 def main() -> None:

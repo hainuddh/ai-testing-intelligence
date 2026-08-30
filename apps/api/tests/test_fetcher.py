@@ -81,6 +81,7 @@ def test_fetch_endpoint_persists_items_and_deduplicates(db_session):
     assert first.items_created == 1
     assert second.items_created == 0
     assert db_session.query(ContentItem).count() == 1
+    assert db_session.query(ContentItem).one().analysis_status == "pending"
     assert db_session.query(FetchRun).count() == 2
 
 

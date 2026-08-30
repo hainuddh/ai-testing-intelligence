@@ -45,6 +45,11 @@ def test_list_filter_and_get_content(client, db_session):
         url="https://example.com/agent-testing",
         summary="A practical guide",
         published_at=datetime(2026, 8, 20, tzinfo=UTC),
+        analysis_status="analyzed",
+        testing_relevance_score=85,
+        testing_value_score=90,
+        analysis_summary="Testing summary",
+        testing_value_analysis="Testing value",
     )
     db_session.add_all(
         [
@@ -54,6 +59,9 @@ def test_list_filter_and_get_content(client, db_session):
                 title="Other article",
                 url="https://example.com/other",
                 body="Unrelated content",
+                analysis_status="filtered",
+                testing_relevance_score=20,
+                testing_value_score=10,
             ),
         ]
     )
@@ -69,6 +77,7 @@ def test_list_filter_and_get_content(client, db_session):
     assert response.status_code == 200
     assert response.json()["total"] == 1
     assert response.json()["items"][0]["title"] == "Reliable agent testing"
+    assert response.json()["items"][0]["source_name"] == "First"
     assert detail.status_code == 200
     assert detail.json()["source_id"] == first_source.id
     assert client.get("/api/v1/content/9999", headers=headers).status_code == 404
@@ -86,3 +95,7 @@ def test_list_filter_and_get_content(client, db_session):
     assert ranged.json()["total"] == 1
     assert ranged.json()["items"][0]["id"] == matching.id
     assert invalid_range.status_code == 422
+
+    high_value = client.get("/api/v1/content?min_value_score=95", headers=headers)
+    assert high_value.status_code == 200
+    assert high_value.json()["total"] == 0

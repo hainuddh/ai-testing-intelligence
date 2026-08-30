@@ -1,7 +1,7 @@
 import argparse
 from dataclasses import dataclass
 
-from sqlalchemy import select
+from sqlalchemy import select, text
 from sqlalchemy.orm import Session
 
 from app.database import engine
@@ -60,55 +60,75 @@ SAMPLE_SOURCES = (
 )
 
 
-def seed_sources(username: str = "admin") -> tuple[int, int]:
+def seed_samples(session: Session, user: User) -> tuple[int, int]:
+    sources_created = 0
+    endpoints_created = 0
+    for sample in SAMPLE_SOURCES:
+        source = session.scalar(select(Source).where(Source.name == sample.name))
+        if source is None:
+            source = Source(
+                name=sample.name,
+                source_type="website",
+                homepage_url=sample.homepage_url,
+                description=sample.description,
+                languages=["en"],
+                trust_level=5,
+                topics=list(sample.topics),
+                status="active",
+                created_by=user.id,
+            )
+            session.add(source)
+            session.flush()
+            sources_created += 1
+        endpoint = session.scalar(
+            select(SourceEndpoint).where(SourceEndpoint.url == sample.feed_url)
+        )
+        if endpoint is None:
+            session.add(
+                SourceEndpoint(
+                    source_id=source.id,
+                    name="Official RSS / Atom",
+                    endpoint_type="rss",
+                    url=sample.feed_url,
+                    fetch_interval_minutes=sample.fetch_interval_minutes,
+                    max_items_per_run=sample.max_items_per_run,
+                )
+            )
+            endpoints_created += 1
+    return sources_created, endpoints_created
+
+
+def seed_sources(username: str = "admin", *, reset: bool = False) -> tuple[int, int, int]:
     with Session(engine) as session:
         user = session.scalar(select(User).where(User.username == username))
         if user is None:
             raise SystemExit(f"User {username!r} does not exist")
-        sources_created = 0
-        endpoints_created = 0
-        for sample in SAMPLE_SOURCES:
-            source = session.scalar(select(Source).where(Source.name == sample.name))
-            if source is None:
-                source = Source(
-                    name=sample.name,
-                    source_type="website",
-                    homepage_url=sample.homepage_url,
-                    description=sample.description,
-                    languages=["en"],
-                    trust_level=5,
-                    topics=list(sample.topics),
-                    status="active",
-                    created_by=user.id,
-                )
-                session.add(source)
-                session.flush()
-                sources_created += 1
-            endpoint = session.scalar(
-                select(SourceEndpoint).where(SourceEndpoint.url == sample.feed_url)
-            )
-            if endpoint is None:
-                session.add(
-                    SourceEndpoint(
-                        source_id=source.id,
-                        name="Official RSS / Atom",
-                        endpoint_type="rss",
-                        url=sample.feed_url,
-                        fetch_interval_minutes=sample.fetch_interval_minutes,
-                        max_items_per_run=sample.max_items_per_run,
-                    )
-                )
-                endpoints_created += 1
+        removed = 0
+        if reset:
+            if session.get_bind().dialect.name == "postgresql":
+                session.execute(text("SELECT pg_advisory_xact_lock(82429101)"))
+            sample_names = [sample.name for sample in SAMPLE_SOURCES]
+            sources = list(session.scalars(select(Source).where(Source.name.in_(sample_names))))
+            for source in sources:
+                session.delete(source)
+            session.flush()
+            removed = len(sources)
+        sources_created, endpoints_created = seed_samples(session, user)
         session.commit()
-        return sources_created, endpoints_created
+        return removed, sources_created, endpoints_created
 
 
 def main() -> None:
     parser = argparse.ArgumentParser(description="Add sample AI news sources")
     parser.add_argument("--username", default="admin", help="Owner of newly created sources")
+    parser.add_argument(
+        "--reset",
+        action="store_true",
+        help="Delete and recreate only the built-in sample sources and their data",
+    )
     args = parser.parse_args()
-    sources, endpoints = seed_sources(args.username)
-    print(f"Created {sources} sources and {endpoints} endpoints")
+    removed, sources, endpoints = seed_sources(args.username, reset=args.reset)
+    print(f"Removed {removed}, created {sources} sources and {endpoints} endpoints")
 
 
 if __name__ == "__main__":

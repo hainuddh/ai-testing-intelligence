@@ -65,3 +65,28 @@ docker compose logs -f worker
 
 The command only creates missing sample sources and endpoints. It does not insert fake
 articles; the worker collects current entries from the configured publishers.
+
+Reset only the built-in sample sources, their endpoints, fetch history, and collected content:
+
+```bash
+docker compose exec api python -m app.seed_sources --username admin --reset
+docker compose restart worker
+```
+
+Configure an OpenAI-compatible analysis model in `.env` to turn collected articles into
+testing intelligence:
+
+```dotenv
+ATI_ANALYSIS_API_BASE_URL=https://api.openai.com/v1
+ATI_ANALYSIS_API_KEY=replace-with-your-model-api-key
+ATI_ANALYSIS_MODEL=gpt-4o-mini
+```
+
+The worker evaluates testing relevance and value, filters general AI news out of the main
+radar, and generates the in-app summary, testing scenarios, adoption suggestions, and risks.
+Without a configured model, collected articles remain pending and the intelligence feed is
+intentionally empty rather than presenting unreviewed general AI news.
+
+Only HTTPS analysis endpoints are accepted. By default, analysis sends the feed title and
+summary, not a separately downloaded full article. Set `ATI_ANALYSIS_FETCH_FULL_CONTENT=true`
+only after reviewing the model provider's data retention, copyright, and cost implications.

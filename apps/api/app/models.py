@@ -89,8 +89,30 @@ class ContentItem(Base):
     fetched_at: Mapped[datetime] = mapped_column(
         DateTime(timezone=True), default=utc_now, index=True
     )
+    analysis_status: Mapped[str] = mapped_column(String(30), default="pending", index=True)
+    analysis_attempts: Mapped[int] = mapped_column(Integer, default=0)
+    testing_relevance_score: Mapped[int | None] = mapped_column(
+        Integer, nullable=True, index=True
+    )
+    testing_value_score: Mapped[int | None] = mapped_column(Integer, nullable=True, index=True)
+    analysis_summary: Mapped[str | None] = mapped_column(Text, nullable=True)
+    testing_value_analysis: Mapped[str | None] = mapped_column(Text, nullable=True)
+    applicable_scenarios: Mapped[list[str]] = mapped_column(JSON, default=list)
+    adoption_suggestions: Mapped[list[str]] = mapped_column(JSON, default=list)
+    analysis_risks: Mapped[list[str]] = mapped_column(JSON, default=list)
+    analysis_tags: Mapped[list[str]] = mapped_column(JSON, default=list)
+    analysis_model: Mapped[str | None] = mapped_column(String(200), nullable=True)
+    analysis_error: Mapped[str | None] = mapped_column(Text, nullable=True)
+    analyzed_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
+    next_analysis_at: Mapped[datetime | None] = mapped_column(
+        DateTime(timezone=True), nullable=True, index=True
+    )
 
     source: Mapped[Source] = relationship(back_populates="content_items")
+
+    @property
+    def source_name(self) -> str:
+        return self.source.name
 
 
 class FetchRun(Base):

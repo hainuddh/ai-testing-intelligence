@@ -175,6 +175,47 @@ Machine Learning Mastery。命令只创建缺失的信源和 RSS/Atom 端点，�
 重复添加，也不会插入伪造文章。Worker 完成首次采集后，真实订阅内容会显示在
 “内容情报”页面。若管理员用户名不是 `admin`，请替换 `--username` 的值。
 
+需要重新初始化内置示例信源时执行：
+
+```bash
+docker compose exec api python -m app.seed_sources --username admin --reset
+docker compose restart worker
+docker compose logs -f worker
+```
+
+`--reset` 只会删除并重建上述 5 个内置示例信源，同时清除它们关联的端点、采集运行和
+已采集内容。手工创建的信源、用户及其数据不会受到影响。
+
+### 7.2 配置测试情报分析模型
+
+系统需要一个支持 OpenAI Chat Completions 协议的模型，将采集到的通用技术文章转化为
+测试技术情报。在 `.env` 中配置：
+
+```dotenv
+ATI_ANALYSIS_API_BASE_URL=https://api.openai.com/v1
+ATI_ANALYSIS_API_KEY=<模型服务密钥>
+ATI_ANALYSIS_MODEL=gpt-4o-mini
+```
+
+也可以填写兼容该协议的内部模型网关地址和模型名称。模型地址必须使用 HTTPS，避免文章
+内容和 API 密钥通过明文传输。修改后重建并重启 Worker：
+
+```bash
+docker compose up -d --build worker
+docker compose logs -f worker
+```
+
+Worker 会读取新采集和历史待分析内容，生成测试相关性、测试价值、情报摘要、适用测试场景、
+落地建议和风险。相关性低于默认阈值 60 的通用 AI 热点会保留在数据库中，但不会进入主雷达。
+未配置模型时，内容保持 `pending`，主雷达有意不展示未经分析的通用资讯。模型密钥不得提交
+到 Git，也不要写入日志或文档。
+
+默认只把 RSS/Atom 提供的标题和摘要发送给模型服务，不额外下载并发送文章全文。如果明确
+接受相应的数据传输、版权和模型调用成本风险，可设置 `ATI_ANALYSIS_FETCH_FULL_CONTENT=true`。
+建议优先使用企业内部模型网关或具有明确数据保留政策的模型服务，并限制密钥额度。系统还会
+先通过测试、质量、评测、可靠性、安全、缺陷、回归等确定性信号筛选候选文章，再调用模型，
+降低通用热点、提示注入和无效调用进入主雷达的概率。
+
 ## 8. 验证部署
 
 检查健康接口：
