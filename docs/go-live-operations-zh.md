@@ -329,6 +329,14 @@ cd /home/admin/ai-testing-intelligence
 
 `upgrade` 会先检查磁盘和 Git 工作区，再备份 PostgreSQL、拉取目标版本、构建镜像、部署并执行本地及 HTTPS 健康检查。它要求 Git 工作区干净，并且不会执行 `docker compose down -v`。数据库由 `migrate` 服务执行 Alembic 迁移；涉及表结构变化时仍须提前审查迁移脚本和备份数据库。
 
+升级后若引入了缓存逻辑变更（如读路径缓存版本号），建议手动重启 API 与 Worker 确保缓存一致：
+
+```bash
+docker compose restart api worker
+```
+
+构建加速说明：所有依赖已锁定精确版本；Dockerfile 使用 `--mount=type=cache` 持久化 pip/npm 下载缓存，源码未变化时依赖层快速复用。默认使用国内镜像源（阿里云 PyPI / 淘宝 NPM），可通过 `PIP_INDEX_URL`、`NPM_CONFIG_REGISTRY` 环境变量覆盖。基础镜像标签固定，不跟随 `latest` 浮动。
+
 底层日常命令：
 
 ```bash

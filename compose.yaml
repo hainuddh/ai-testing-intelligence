@@ -70,7 +70,10 @@ services:
     pids_limit: 100
 
   api:
-    build: ./apps/api
+    build:
+      context: ./apps/api
+      args:
+        PIP_INDEX_URL: ${PIP_INDEX_URL:-https://mirrors.aliyun.com/pypi/simple/}
     command: ["uvicorn", "app.main:app", "--host", "0.0.0.0", "--port", "8000"]
     environment:
       ATI_DATABASE_URL: postgresql+psycopg://${POSTGRES_USER:-ati}:${POSTGRES_PASSWORD}@postgres:5432/${POSTGRES_DB:-ai_testing_intelligence}
@@ -92,7 +95,10 @@ services:
     pids_limit: 100
 
   migrate:
-    build: ./apps/api
+    build:
+      context: ./apps/api
+      args:
+        PIP_INDEX_URL: ${PIP_INDEX_URL:-https://mirrors.aliyun.com/pypi/simple/}
     command: ["alembic", "upgrade", "head"]
     environment:
       ATI_DATABASE_URL: postgresql+psycopg://${POSTGRES_USER:-ati}:${POSTGRES_PASSWORD}@postgres:5432/${POSTGRES_DB:-ai_testing_intelligence}
@@ -103,7 +109,10 @@ services:
     mem_limit: 256m
 
   worker:
-    build: ./apps/api
+    build:
+      context: ./apps/api
+      args:
+        PIP_INDEX_URL: ${PIP_INDEX_URL:-https://mirrors.aliyun.com/pypi/simple/}
     command: ["python", "-m", "app.worker"]
     environment:
       ATI_DATABASE_URL: postgresql+psycopg://${POSTGRES_USER:-ati}:${POSTGRES_PASSWORD}@postgres:5432/${POSTGRES_DB:-ai_testing_intelligence}
@@ -124,7 +133,10 @@ services:
     pids_limit: 100
 
   web:
-    build: ./apps/web
+    build:
+      context: ./apps/web
+      args:
+        NPM_CONFIG_REGISTRY: ${NPM_CONFIG_REGISTRY:-https://registry.npmmirror.com/}
     ports:
       - "127.0.0.1:8080:80"
     depends_on:

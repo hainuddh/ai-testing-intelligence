@@ -1,5 +1,8 @@
 .pytest_cache
 __pycache__
-tests
 *.db
 *.pyc
+.coverage
+.ruff_cache
+.venv
+tests

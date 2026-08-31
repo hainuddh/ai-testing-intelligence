@@ -175,6 +175,35 @@ docker compose logs -f api worker web
 
 首次启动和升级时，`migrate` 服务会先执行 Alembic 数据库迁移；迁移成功后 API 和 Worker 才会启动。
 
+### 6.1 构建加速与依赖版本锁定
+
+为避免每次 `docker compose up -d --build` 都重新下载全部依赖，项目已做如下处理：
+
+- **Python 与 Node 依赖均锁定精确版本**，不采用 `^` 或 `>=` 浮动范围，保证可复现构建。
+- **Dockerfile 使用构建缓存挂载**（`--mount=type=cache`），pip 与 npm 的下载缓存跨构建复用，源码未变化时几乎秒级复用。
+- **默认使用国内镜像源**加速下载：Python 默认 `https://mirrors.aliyun.com/pypi/simple/`，Node 默认 `https://registry.npmmirror.com/`。海外服务器可在 `.env` 中覆盖：
+  ```dotenv
+  PIP_INDEX_URL=https://pypi.org/simple/
+  NPM_CONFIG_REGISTRY=https://registry.npmjs.org/
+  ```
+- **基础镜像使用固定版本标签**（`python:3.12-slim`、`node:24-alpine`、`nginx:1.29-alpine`），不跟随 latest 漂移。
+- `.dockerignore` 排除 `node_modules`、`dist`、`.venv`、缓存等，减小构建上下文传输量。
+
+构建相关的常用命令：
+
+```bash
+# 构建并启动（推荐，自动复用依赖缓存）
+docker compose up -d --build
+
+# 仅构建，便于排查
+docker compose build api web
+
+# 强制重建依赖层（升级或清缓存后）
+docker compose build --no-cache api web
+```
+
+注意：`--mount=type=cache` 需要 BuildKit（Docker 24+ 默认启用）。若在旧版本 Docker 上遇到构建报错，先升级 Docker 或启用 BuildKit。
+
 ## 7. 初始化管理员
 
 确认 API 已启动后创建第一个管理员：
@@ -385,6 +414,12 @@ docker compose logs --tail 200 migrate api worker web
 ```
 
 更新后重新执行健康检查，并确认 `migrate` 服务为 `Exited (0)`。若本次升级引入了缓存相关改动，建议在升级后执行 `docker compose restart api worker`，让缓存版本号与代码保持一致。之后做登录、查询、创建信源等冒烟测试。
+
+升级常见注意事项：
+
+- 依赖版本已锁定，升级构建会自动复用 Docker 缓存；若 `pip install` 或 `npm ci` 报版本解析错误，说明依赖锁定与实际环境不符，升级时应一并更新 `pyproject.toml` / `package.json` 与 lock 文件。
+- 若清除了 Docker 缓存（`docker compose build --no-cache`）或更换了基础镜像版本，首次构建会重新下载全部依赖，属正常现象。
+- 升级涉及迁移脚本时，`migrate` 服务必须成功退出（`Exited (0)`）后 API/Worker 才会启动；若迁移失败，先回滚到备份，不要直接删除数据卷。
 
 ## 12. 数据备份
 
