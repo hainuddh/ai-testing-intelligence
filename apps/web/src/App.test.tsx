@@ -223,4 +223,29 @@ describe('management radar workflow', () => {
     }))
     expect(await screen.findByText('暂无采集内容')).toBeInTheDocument()
   })
+
+  it('shows backend conflict detail when creating a duplicate user', async () => {
+    localStorage.setItem('access_token', 'admin-token')
+    const user = userEvent.setup()
+    const fetchMock = vi.spyOn(globalThis, 'fetch')
+      .mockResolvedValueOnce(json({ id: 'admin-1', username: 'root', role: 'admin' }))
+      .mockResolvedValueOnce(json({ items: [], total: 0 }))
+      .mockResolvedValueOnce(json({ items: [{ id: 'user-1', username: 'viewer1', role: 'viewer', is_active: true }], total: 1 }))
+      .mockResolvedValueOnce(json({ detail: '用户名 viewer1 已存在，请更换用户名' }, 409))
+
+    render(<App />)
+    await screen.findByRole('heading', { name: '内容情报' })
+    await user.click(screen.getByRole('button', { name: '用户管理' }))
+    await screen.findByText('viewer1')
+    await user.click(screen.getByRole('button', { name: '新增用户' }))
+    await user.type(screen.getByLabelText('用户名'), 'viewer1')
+    await user.type(screen.getByLabelText('初始密码'), 'password123')
+    await user.click(screen.getByRole('button', { name: '创建用户' }))
+
+    expect((await screen.findAllByText('用户名 viewer1 已存在，请更换用户名')).length).toBeGreaterThan(0)
+    expect(fetchMock).toHaveBeenCalledWith('/api/v1/users', expect.objectContaining({
+      method: 'POST',
+      body: JSON.stringify({ username: 'viewer1', password: 'password123', role: 'viewer', is_active: true }),
+    }))
+  })
 })

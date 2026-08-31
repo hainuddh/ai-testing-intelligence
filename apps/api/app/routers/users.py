@@ -1,3 +1,5 @@
+from datetime import UTC, datetime
+
 from fastapi import APIRouter, HTTPException, Query, status
 from sqlalchemy import func, select
 from sqlalchemy.exc import IntegrityError
@@ -42,11 +44,17 @@ def list_users(
 
 @router.post("", response_model=AdminUserResponse, status_code=status.HTTP_201_CREATED)
 def create_user(payload: UserCreate, db: DbSession, _admin: AdminUser) -> User:
+    if db.scalar(select(User.id).where(User.username == payload.username).limit(1)):
+        raise HTTPException(
+            status_code=status.HTTP_409_CONFLICT,
+            detail=f"用户名 {payload.username!r} 已存在，请更换用户名",
+        )
     user = User(
         username=payload.username,
         password_hash=hash_password(payload.password),
         role=payload.role,
         is_active=payload.is_active,
+        created_at=datetime.now(UTC),
     )
     db.add(user)
     try:
@@ -54,7 +62,8 @@ def create_user(payload: UserCreate, db: DbSession, _admin: AdminUser) -> User:
     except IntegrityError as exc:
         db.rollback()
         raise HTTPException(
-            status_code=status.HTTP_409_CONFLICT, detail="Username already exists"
+            status_code=status.HTTP_409_CONFLICT,
+            detail=f"创建用户 {payload.username!r} 失败：存在冲突记录，请更换用户名",
         ) from exc
     db.refresh(user)
     delete_prefix_sync("database:status")

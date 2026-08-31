@@ -173,7 +173,14 @@ export default function App() {
         logout()
         throw new Error('登录状态已失效，请重新登录')
       }
-      if (!response.ok) throw new Error(`请求失败 (${response.status})`)
+      if (!response.ok) {
+        let detail = `请求失败 (${response.status})`
+        try {
+          const body = await response.json()
+          if (body?.detail) detail = body.detail
+        } catch { /* ignore parse errors */ }
+        throw new Error(detail)
+      }
       if (response.status === 204) return undefined as T
       return await response.json() as T
     } catch (requestError) {
@@ -490,6 +497,7 @@ export default function App() {
   }
 
   const saveUser = async (values: UserForm) => {
+    if (saving) return
     setSaving(true)
     setError('')
     try {
