@@ -51,7 +51,7 @@ describe('management radar workflow', () => {
   it('filters intelligence by query and date range', async () => {
     localStorage.setItem('access_token', 'existing-token')
     const item = {
-      id: 'content-1', source_id: 'source-1', source_name: 'Testing Lab', title: 'Agents gain new tools', url: 'https://example.com/agents',
+      id: 1, source_id: 1, source_name: 'Testing Lab', title: 'Agents gain new tools', url: 'https://example.com/agents',
       summary: 'Original summary', body: '', published_at: '2026-08-20T00:00:00Z', fetched_at: '2026-08-21T00:00:00Z',
       analysis_status: 'analyzed', testing_relevance_score: 88, testing_value_score: 92,
       analysis_summary: 'A concise testing intelligence summary', testing_value_analysis: 'Useful for autonomous regression testing.',
@@ -90,6 +90,49 @@ describe('management radar workflow', () => {
     expect(await screen.findByText('测试价值分析')).toBeInTheDocument()
     expect(screen.getByText('Useful for autonomous regression testing.')).toBeInTheDocument()
     expect(screen.getByRole('link', { name: /查看原文/ })).toHaveAttribute('href', item.url)
+  })
+
+  it('selects multiple intelligence cards and downloads a Markdown report', async () => {
+    localStorage.setItem('access_token', 'existing-token')
+    const first = {
+      id: 1, source_id: 1, source_name: 'Testing Lab', title: 'Agent regression testing', url: 'https://example.com/agent',
+      summary: '', published_at: null, fetched_at: '2026-08-21T00:00:00Z', analysis_status: 'analyzed',
+      testing_relevance_score: 90, testing_value_score: 88, analysis_summary: 'Agent testing summary',
+      testing_value_analysis: 'Regression testing value', applicable_scenarios: ['Regression testing'],
+      adoption_suggestions: ['Pilot'], analysis_risks: ['False positives'], analysis_tags: ['Agent'],
+      analysis_model: 'test-model', analyzed_at: '2026-08-21T01:00:00Z',
+    }
+    const second = { ...first, id: 2, title: 'Visual quality testing', url: 'https://example.com/visual' }
+    const fetchMock = vi.spyOn(globalThis, 'fetch')
+      .mockResolvedValueOnce(json({ id: 'user-1', username: 'reader', role: 'viewer' }))
+      .mockResolvedValueOnce(json({ items: [first, second], total: 2 }))
+      .mockResolvedValueOnce(new Response('# 软件测试技术情报报告', {
+        status: 200,
+        headers: {
+          'Content-Type': 'text/markdown; charset=utf-8',
+          'Content-Disposition': 'attachment; filename="testing-intelligence-report.md"',
+        },
+      }))
+    const createObjectURL = vi.fn(() => 'blob:testing-report')
+    const revokeObjectURL = vi.fn()
+    Object.defineProperty(URL, 'createObjectURL', { configurable: true, value: createObjectURL })
+    Object.defineProperty(URL, 'revokeObjectURL', { configurable: true, value: revokeObjectURL })
+    const clickSpy = vi.spyOn(HTMLAnchorElement.prototype, 'click').mockImplementation(() => undefined)
+
+    render(<App />)
+    await screen.findByText(first.title)
+    await userEvent.click(screen.getByLabelText(`选择 ${first.title}`))
+    await userEvent.click(screen.getByLabelText(`选择 ${second.title}`))
+    await userEvent.click(screen.getByRole('button', { name: '导出 Markdown (2)' }))
+
+    await waitFor(() => expect(fetchMock).toHaveBeenLastCalledWith('/api/v1/content/export', {
+      method: 'POST',
+      headers: { Authorization: 'Bearer existing-token', 'Content-Type': 'application/json' },
+      body: JSON.stringify({ content_ids: [1, 2] }),
+    }))
+    expect(createObjectURL).toHaveBeenCalledOnce()
+    expect(clickSpy).toHaveBeenCalledOnce()
+    expect(revokeObjectURL).toHaveBeenCalledWith('blob:testing-report')
   })
 
   it('allows a maintainer to create a source', async () => {
@@ -147,5 +190,37 @@ describe('management radar workflow', () => {
     expect(await screen.findByText('postgresql')).toBeInTheDocument()
     expect(screen.getByText('240')).toBeInTheDocument()
     expect(fetchMock).toHaveBeenCalledWith('/api/v1/database/status', expect.any(Object))
+  })
+
+  it('lets an admin query and bulk-delete collected content', async () => {
+    localStorage.setItem('access_token', 'admin-token')
+    const user = userEvent.setup()
+    const collected = [
+      { id: 11, source_id: 1, source_name: 'OpenAI News', title: 'Testing candidate', url: 'https://example.com/11', summary: 'A testing summary', published_at: null, fetched_at: '2026-08-30T00:00:00Z', analysis_status: 'pending', analysis_attempts: 0, testing_relevance_score: null, testing_value_score: null, analysis_error: null, analyzed_at: null },
+      { id: 12, source_id: 1, source_name: 'OpenAI News', title: 'Filtered update', url: 'https://example.com/12', summary: 'General news', published_at: null, fetched_at: '2026-08-29T00:00:00Z', analysis_status: 'filtered', analysis_attempts: 1, testing_relevance_score: 10, testing_value_score: 5, analysis_error: null, analyzed_at: '2026-08-29T01:00:00Z' },
+    ]
+    const fetchMock = vi.spyOn(globalThis, 'fetch')
+      .mockResolvedValueOnce(json({ id: 1, username: 'root', role: 'admin' }))
+      .mockResolvedValueOnce(json({ items: [], total: 0 }))
+      .mockResolvedValueOnce(json({ items: collected, total: 2 }))
+      .mockResolvedValueOnce(json({ items: [source], total: 1 }))
+      .mockResolvedValueOnce(json({ deleted: 2 }))
+      .mockResolvedValueOnce(json({ items: [], total: 0 }))
+
+    render(<App />)
+    await screen.findByRole('heading', { name: '内容情报' })
+    await user.click(screen.getByRole('button', { name: '采集管理' }))
+    expect(await screen.findByText('Testing candidate')).toBeInTheDocument()
+    await user.click(screen.getByLabelText('选择采集内容 Testing candidate'))
+    await user.click(screen.getByLabelText('选择采集内容 Filtered update'))
+    await user.click(screen.getByRole('button', { name: '批量删除 (2)' }))
+    await user.click(await screen.findByRole('button', { name: '确认删除' }))
+
+    await waitFor(() => expect(fetchMock).toHaveBeenCalledWith('/api/v1/collected-content/bulk-delete', {
+      method: 'POST',
+      headers: { Authorization: 'Bearer admin-token', 'Content-Type': 'application/json' },
+      body: JSON.stringify({ content_ids: [11, 12] }),
+    }))
+    expect(await screen.findByText('暂无采集内容')).toBeInTheDocument()
   })
 })

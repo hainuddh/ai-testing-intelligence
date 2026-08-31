@@ -90,3 +90,16 @@ intentionally empty rather than presenting unreviewed general AI news.
 Only HTTPS analysis endpoints are accepted. By default, analysis sends the feed title and
 summary, not a separately downloaded full article. Set `ATI_ANALYSIS_FETCH_FULL_CONTENT=true`
 only after reviewing the model provider's data retention, copyright, and cost implications.
+
+Select one or more analyzed intelligence cards in the web interface and use **Export
+Markdown** to download a merged testing report. Reports preserve the selection order and
+include scores, testing value analysis, applicable scenarios, adoption suggestions, risks,
+tags, and original evidence links.
+
+Administrators can use **Collected Content** to query every stored item, including pending,
+analyzed, filtered, and failed records. The view supports keyword, source, status, and date
+filters plus guarded single or bulk deletion. Deleting collected content also removes its
+analysis result, but does not delete the source or collection endpoint.
+
+Source deletion is admin-only because it cascades collected content. Maintainers can still
+create and edit sources and manage collection endpoints.

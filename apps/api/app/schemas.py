@@ -145,6 +145,42 @@ class ContentListResponse(BaseModel):
     total: int
 
 
+class ContentExportRequest(BaseModel):
+    content_ids: list[int] = Field(min_length=1, max_length=100)
+
+
+class CollectedContentResponse(BaseModel):
+    model_config = ConfigDict(from_attributes=True)
+
+    id: int
+    source_id: int
+    source_name: str
+    title: str
+    url: str
+    summary: str | None
+    published_at: datetime | None
+    fetched_at: datetime
+    analysis_status: str
+    analysis_attempts: int
+    testing_relevance_score: int | None
+    testing_value_score: int | None
+    analysis_error: str | None
+    analyzed_at: datetime | None
+
+
+class CollectedContentListResponse(BaseModel):
+    items: list[CollectedContentResponse]
+    total: int
+
+
+class ContentBulkDeleteRequest(BaseModel):
+    content_ids: list[int] = Field(min_length=1, max_length=100)
+
+
+class ContentBulkDeleteResponse(BaseModel):
+    deleted: int
+
+
 class DatabaseStatusResponse(BaseModel):
     dialect: str
     row_counts: dict[str, int]

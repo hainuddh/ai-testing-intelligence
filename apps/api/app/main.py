@@ -3,7 +3,7 @@ from contextlib import asynccontextmanager
 from fastapi import APIRouter, FastAPI
 
 from app.config import settings
-from app.routers import auth, content, database_status, sources, users
+from app.routers import auth, collected_content, content, database_status, sources, users
 
 
 @asynccontextmanager
@@ -23,6 +23,7 @@ def health_check() -> dict[str, str]:
 api.include_router(auth.router)
 api.include_router(sources.router)
 api.include_router(content.router)
+api.include_router(collected_content.router)
 api.include_router(users.router)
 api.include_router(database_status.router)
 app.include_router(api)

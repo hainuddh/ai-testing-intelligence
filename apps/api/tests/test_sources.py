@@ -119,6 +119,24 @@ def test_viewer_cannot_create_source(client, db_session):
     assert response.status_code == 403
 
 
+def test_only_admin_can_delete_source(client, db_session):
+    maintainer_headers = auth_headers(db_session)
+    source = client.post(
+        "/api/v1/sources",
+        headers=maintainer_headers,
+        json={
+            "name": "Protected collected content",
+            "source_type": "blog",
+            "languages": ["en"],
+            "topics": [],
+        },
+    ).json()
+
+    response = client.delete(f"/api/v1/sources/{source['id']}", headers=maintainer_headers)
+
+    assert response.status_code == 403
+
+
 def test_source_update_rejects_null_required_field(client, db_session):
     headers = auth_headers(db_session)
     source = client.post(
@@ -139,7 +157,7 @@ def test_source_update_rejects_null_required_field(client, db_session):
     assert response.status_code == 422
 
 
-def test_maintainer_can_update_and_delete_source(client, db_session):
+def test_maintainer_can_update_and_admin_can_delete_source(client, db_session):
     headers = auth_headers(db_session)
     first = client.post(
         "/api/v1/sources",
@@ -170,8 +188,9 @@ def test_maintainer_can_update_and_delete_source(client, db_session):
         headers=headers,
         json={"name": "Existing source"},
     )
-    deleted = client.delete(f"/api/v1/sources/{first['id']}", headers=headers)
-    missing = client.delete(f"/api/v1/sources/{first['id']}", headers=headers)
+    admin_headers = auth_headers(db_session, role="admin")
+    deleted = client.delete(f"/api/v1/sources/{first['id']}", headers=admin_headers)
+    missing = client.delete(f"/api/v1/sources/{first['id']}", headers=admin_headers)
 
     assert updated.status_code == 200
     assert updated.json()["description"] == "Updated"

@@ -2,7 +2,7 @@ from fastapi import APIRouter, HTTPException, Query, status
 from sqlalchemy import func, select, text
 from sqlalchemy.exc import IntegrityError
 
-from app.dependencies import CurrentUser, DbSession, MaintainerUser
+from app.dependencies import AdminUser, CurrentUser, DbSession, MaintainerUser
 from app.models import Source, SourceEndpoint
 from app.schemas import (
     EndpointCreate,
@@ -16,9 +16,10 @@ from app.schemas import (
 router = APIRouter(prefix="/sources", tags=["sources"])
 
 
-def wait_for_fetcher(db: DbSession) -> None:
+def wait_for_content_workers(db: DbSession) -> None:
     if db.get_bind().dialect.name == "postgresql":
         db.execute(text("SELECT pg_advisory_xact_lock(82429101)"))
+        db.execute(text("SELECT pg_advisory_xact_lock(82429102)"))
 
 
 @router.post("", response_model=SourceResponse, status_code=status.HTTP_201_CREATED)
@@ -92,8 +93,8 @@ def update_source(
 
 
 @router.delete("/{source_id}", status_code=status.HTTP_204_NO_CONTENT)
-def delete_source(source_id: int, db: DbSession, _user: MaintainerUser) -> None:
-    wait_for_fetcher(db)
+def delete_source(source_id: int, db: DbSession, _user: AdminUser) -> None:
+    wait_for_content_workers(db)
     source = db.get(Source, source_id)
     if source is None:
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Source not found")
@@ -150,7 +151,7 @@ def delete_endpoint(
     db: DbSession,
     _user: MaintainerUser,
 ) -> None:
-    wait_for_fetcher(db)
+    wait_for_content_workers(db)
     endpoint = db.scalar(
         select(SourceEndpoint).where(
             SourceEndpoint.id == endpoint_id, SourceEndpoint.source_id == source_id

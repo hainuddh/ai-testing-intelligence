@@ -36,6 +36,23 @@ def due_endpoints(db: Session) -> list[SourceEndpoint]:
     ]
 
 
+def run_analysis() -> None:
+    if engine.dialect.name != "postgresql":
+        with Session(engine) as db:
+            analyzed, failed = analyze_pending(db)
+    else:
+        with engine.connect() as lock_connection:
+            if not lock_connection.scalar(text("SELECT pg_try_advisory_lock(82429102)")):
+                return
+            try:
+                with Session(engine) as db:
+                    analyzed, failed = analyze_pending(db)
+            finally:
+                lock_connection.execute(text("SELECT pg_advisory_unlock(82429102)"))
+    if analyzed or failed:
+        logger.info("Analyzed content succeeded=%s failed=%s", analyzed, failed)
+
+
 def run_once() -> None:
     if engine.dialect.name != "postgresql":
         with Session(engine) as db:
@@ -51,10 +68,7 @@ def run_once() -> None:
                 except Exception:
                     db.rollback()
                     logger.exception("Unhandled fetch failure endpoint_id=%s", endpoint.id)
-        with Session(engine) as db:
-            analyzed, failed = analyze_pending(db)
-            if analyzed or failed:
-                logger.info("Analyzed content succeeded=%s failed=%s", analyzed, failed)
+        run_analysis()
         return
 
     with engine.connect() as lock_connection:
@@ -76,10 +90,7 @@ def run_once() -> None:
                         logger.exception("Unhandled fetch failure endpoint_id=%s", endpoint.id)
         finally:
             lock_connection.execute(text("SELECT pg_advisory_unlock(82429101)"))
-    with Session(engine) as db:
-        analyzed, failed = analyze_pending(db)
-        if analyzed or failed:
-            logger.info("Analyzed content succeeded=%s failed=%s", analyzed, failed)
+    run_analysis()
 
 
 def main() -> None:

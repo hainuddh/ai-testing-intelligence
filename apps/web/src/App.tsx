@@ -1,11 +1,13 @@
-import { useEffect, useState } from 'react'
+import { useEffect, useRef, useState } from 'react'
 import {
   ArrowRightOutlined,
   DatabaseOutlined,
   DeleteOutlined,
+  DownloadOutlined,
   EditOutlined,
   FileSearchOutlined,
   GlobalOutlined,
+  InboxOutlined,
   LogoutOutlined,
   PlusOutlined,
   RadarChartOutlined,
@@ -14,6 +16,7 @@ import {
 import {
   Alert,
   Button,
+  Checkbox,
   Drawer,
   Form,
   Input,
@@ -40,8 +43,8 @@ type Source = {
 }
 type SourceForm = Omit<Source, 'id' | 'languages' | 'topics'> & { languages: string; topics: string }
 type ContentItem = {
-  id: string
-  source_id: string
+  id: number
+  source_id: number
   source_name: string
   title: string
   url: string
@@ -72,13 +75,30 @@ type Endpoint = {
   health_status: string
 }
 type EndpointForm = Omit<Endpoint, 'id' | 'source_id' | 'enabled' | 'health_status'>
+type CollectedItem = {
+  id: number
+  source_id: number
+  source_name: string
+  title: string
+  url: string
+  summary: string | null
+  published_at: string | null
+  fetched_at: string
+  analysis_status: 'pending' | 'analyzed' | 'filtered' | 'failed'
+  analysis_attempts: number
+  testing_relevance_score: number | null
+  testing_value_score: number | null
+  analysis_error: string | null
+  analyzed_at: string | null
+}
 type UserForm = { username: string; password?: string; role: Role; is_active: boolean }
 type DatabaseCounts = { dialect: string; users: number; sources: number; source_endpoints: number; content_items: number; fetch_runs: number }
-type Tab = 'content' | 'sources' | 'users' | 'database'
+type Tab = 'content' | 'sources' | 'collection' | 'users' | 'database'
 
 const typeLabels: Record<string, string> = { website: '网站', newsletter: '通讯', rss: 'RSS', social: '社交媒体' }
 const trustLabels: Record<number, string> = { 5: '最高可信', 4: '高可信', 3: '待验证', 2: '观察中', 1: '低可信' }
 const roleLabels: Record<Role, string> = { viewer: '浏览者', maintainer: '维护者', admin: '管理员' }
+const analysisStatusLabels = { pending: '待分析', analyzed: '已入雷达', filtered: '已过滤', failed: '分析失败' }
 const splitValues = (value: string) => value.split(/[,，]/).map((item) => item.trim()).filter(Boolean)
 const list = <T,>(data: T[] | { items: T[] }) => Array.isArray(data) ? data : data.items
 const dateText = (value: string | null) => value ? new Intl.DateTimeFormat('zh-CN', { dateStyle: 'medium' }).format(new Date(value)) : '时间未知'
@@ -101,7 +121,20 @@ export default function App() {
   const [endDate, setEndDate] = useState('')
   const [minValueScore, setMinValueScore] = useState(60)
   const [selectedContent, setSelectedContent] = useState<ContentItem | null>(null)
+  const [selectedContentIds, setSelectedContentIds] = useState<number[]>([])
+  const [exporting, setExporting] = useState(false)
   const [users, setUsers] = useState<User[]>([])
+  const [collectedItems, setCollectedItems] = useState<CollectedItem[]>([])
+  const [collectedTotal, setCollectedTotal] = useState(0)
+  const [collectedPage, setCollectedPage] = useState(1)
+  const [collectedQuery, setCollectedQuery] = useState('')
+  const [collectedStatus, setCollectedStatus] = useState('')
+  const [collectedSource, setCollectedSource] = useState('')
+  const [collectedStartDate, setCollectedStartDate] = useState('')
+  const [collectedEndDate, setCollectedEndDate] = useState('')
+  const [selectedCollectedIds, setSelectedCollectedIds] = useState<number[]>([])
+  const [appliedCollectedFilters, setAppliedCollectedFilters] = useState({ query: '', status: '', sourceId: '', startDate: '', endDate: '' })
+  const collectedRequestId = useRef(0)
   const [database, setDatabase] = useState<DatabaseCounts | null>(null)
   const [loading, setLoading] = useState(false)
   const [saving, setSaving] = useState(false)
@@ -192,6 +225,65 @@ export default function App() {
     }
   }
 
+  const toggleContentSelection = (id: number) => {
+    setSelectedContentIds((current) => {
+      if (current.includes(id)) return current.filter((contentId) => contentId !== id)
+      if (current.length >= 100) {
+        setError('单次报告最多选择 100 条情报')
+        return current
+      }
+      return [...current, id]
+    })
+  }
+
+  const toggleCurrentPageSelection = () => {
+    const pageIds = content.map((item) => item.id)
+    const allSelected = pageIds.every((id) => selectedContentIds.includes(id))
+    setSelectedContentIds((current) => {
+      if (allSelected) return current.filter((id) => !pageIds.includes(id))
+      const additions = pageIds.filter((id) => !current.includes(id))
+      const available = 100 - current.length
+      if (additions.length > available) setError('单次报告最多选择 100 条情报')
+      return [...current, ...additions.slice(0, available)]
+    })
+  }
+
+  const exportSelectedContent = async () => {
+    if (!token || selectedContentIds.length === 0) return
+    setExporting(true)
+    setError('')
+    try {
+      const response = await fetch('/api/v1/content/export', {
+        method: 'POST',
+        headers: { Authorization: `Bearer ${token}`, 'Content-Type': 'application/json' },
+        body: JSON.stringify({ content_ids: selectedContentIds }),
+      })
+      if (response.status === 401) {
+        logout()
+        throw new Error('登录状态已失效，请重新登录')
+      }
+      if (!response.ok) throw new Error(`导出失败 (${response.status})`)
+      const blob = await response.blob()
+      const disposition = response.headers.get('Content-Disposition') ?? ''
+      const filename = disposition.match(/filename="?([^";]+)"?/i)?.[1] ?? 'testing-intelligence-report.md'
+      const url = URL.createObjectURL(blob)
+      const anchor = document.createElement('a')
+      try {
+        anchor.href = url
+        anchor.download = filename
+        document.body.appendChild(anchor)
+        anchor.click()
+      } finally {
+        anchor.remove()
+        window.setTimeout(() => URL.revokeObjectURL(url), 0)
+      }
+    } catch (requestError) {
+      setError(requestError instanceof Error ? requestError.message : '导出 Markdown 报告失败')
+    } finally {
+      setExporting(false)
+    }
+  }
+
   const loadUsers = async () => {
     setLoading(true)
     setError('')
@@ -201,6 +293,61 @@ export default function App() {
       setError(requestError instanceof Error ? requestError.message : '加载用户失败')
     } finally {
       setLoading(false)
+    }
+  }
+
+  const loadCollectedContent = async (page = collectedPage, filters = appliedCollectedFilters) => {
+    const requestId = ++collectedRequestId.current
+    setLoading(true)
+    setError('')
+    try {
+      const params = new URLSearchParams({ offset: String((page - 1) * 20), limit: '20' })
+      if (filters.query) params.set('query', filters.query)
+      if (filters.status) params.set('status', filters.status)
+      if (filters.sourceId) params.set('source_id', filters.sourceId)
+      if (filters.startDate) params.set('start_at', dateBoundary(filters.startDate))
+      if (filters.endDate) params.set('end_at', dateBoundary(filters.endDate, true))
+      const contentRequest = request<{ items: CollectedItem[]; total: number }>(`/api/v1/collected-content?${params}`)
+      const sourceRequest = sources.length === 0
+        ? request<{ items: Source[]; total: number }>('/api/v1/sources?limit=200')
+        : Promise.resolve(null)
+      const [data, sourceData] = await Promise.all([contentRequest, sourceRequest])
+      if (requestId !== collectedRequestId.current) return
+      setCollectedItems(data.items)
+      setCollectedTotal(data.total)
+      if (sourceData) {
+        setSources(sourceData.items)
+        setSourceTotal(sourceData.total)
+      }
+    } catch (requestError) {
+      if (requestId === collectedRequestId.current) {
+        setError(requestError instanceof Error ? requestError.message : '加载采集内容失败')
+      }
+    } finally {
+      if (requestId === collectedRequestId.current) setLoading(false)
+    }
+  }
+
+  const deleteCollectedItems = async (ids: number[]) => {
+    setError('')
+    try {
+      if (ids.length === 1) {
+        await request(`/api/v1/collected-content/${ids[0]}`, { method: 'DELETE' })
+      } else {
+        await request('/api/v1/collected-content/bulk-delete', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ content_ids: ids }),
+        })
+      }
+      setSelectedCollectedIds([])
+      const currentPageDeleted = collectedItems.length > 0
+        && collectedItems.every((item) => ids.includes(item.id))
+      const nextPage = currentPageDeleted && collectedPage > 1 ? collectedPage - 1 : collectedPage
+      setCollectedPage(nextPage)
+      await loadCollectedContent(nextPage)
+    } catch (requestError) {
+      setError(requestError instanceof Error ? requestError.message : '删除采集内容失败')
     }
   }
 
@@ -221,6 +368,7 @@ export default function App() {
     if (!me) return
     if (tab === 'content') void loadContent()
     if (tab === 'sources') void loadSources()
+    if (tab === 'collection' && me.role === 'admin') void loadCollectedContent()
     if (tab === 'users' && me.role === 'admin') void loadUsers()
     if (tab === 'database' && me.role === 'admin') void loadDatabase()
   }, [me, tab])
@@ -362,6 +510,7 @@ export default function App() {
   const tabs: { id: Tab; label: string; icon: React.ReactNode; admin?: boolean }[] = [
     { id: 'content', label: '内容情报', icon: <FileSearchOutlined /> },
     { id: 'sources', label: '信源管理', icon: <GlobalOutlined /> },
+    { id: 'collection', label: '采集管理', icon: <InboxOutlined />, admin: true },
     { id: 'users', label: '用户管理', icon: <TeamOutlined />, admin: true },
     { id: 'database', label: '数据库状态', icon: <DatabaseOutlined />, admin: true },
   ]
@@ -385,8 +534,9 @@ export default function App() {
       </nav>
       <section className="dashboard-content">
         {error && <Alert className="dashboard-alert" type="error" message={error} showIcon closable onClose={() => setError('')} />}
-        {tab === 'content' && <ContentView items={content} total={contentTotal} page={contentPage} loading={loading} query={query} startDate={startDate} endDate={endDate} minValueScore={minValueScore} onQuery={setQuery} onStartDate={setStartDate} onEndDate={setEndDate} onMinValueScore={setMinValueScore} onOpen={setSelectedContent} onSearch={() => { setContentPage(1); void loadContent(1, query) }} onReset={() => { setQuery(''); setStartDate(''); setEndDate(''); setMinValueScore(60); setContentPage(1); void loadContent(1, '', '', '', 60) }} onPage={(page) => { setContentPage(page); void loadContent(page) }} />}
-        {tab === 'sources' && <SourcesView sources={sources} total={sourceTotal} loading={loading} canManage={canManageSources} onAdd={() => openSource()} onEndpoints={(source) => void openEndpoints(source)} onEdit={openSource} onDelete={(source) => Modal.confirm({ title: `删除信源「${source.name}」？`, content: '删除后无法恢复，并会清除关联内容。', okText: '确认删除', cancelText: '取消', okButtonProps: { danger: true }, onOk: () => removeSource(source) })} />}
+        {tab === 'content' && <ContentView items={content} total={contentTotal} page={contentPage} loading={loading} query={query} startDate={startDate} endDate={endDate} minValueScore={minValueScore} selectedIds={selectedContentIds} exporting={exporting} onQuery={setQuery} onStartDate={setStartDate} onEndDate={setEndDate} onMinValueScore={setMinValueScore} onOpen={setSelectedContent} onToggleSelection={toggleContentSelection} onToggleCurrentPage={toggleCurrentPageSelection} onClearSelection={() => setSelectedContentIds([])} onExport={() => void exportSelectedContent()} onSearch={() => { setSelectedContentIds([]); setContentPage(1); void loadContent(1, query) }} onReset={() => { setSelectedContentIds([]); setQuery(''); setStartDate(''); setEndDate(''); setMinValueScore(60); setContentPage(1); void loadContent(1, '', '', '', 60) }} onPage={(page) => { setContentPage(page); void loadContent(page) }} />}
+        {tab === 'sources' && <SourcesView sources={sources} total={sourceTotal} loading={loading} canManage={canManageSources} canDelete={isAdmin} onAdd={() => openSource()} onEndpoints={(source) => void openEndpoints(source)} onEdit={openSource} onDelete={(source) => Modal.confirm({ title: `删除信源「${source.name}」？`, content: '删除后无法恢复，并会清除关联内容。', okText: '确认删除', cancelText: '取消', okButtonProps: { danger: true }, onOk: () => removeSource(source) })} />}
+        {tab === 'collection' && isAdmin && <CollectedContentView items={collectedItems} total={collectedTotal} page={collectedPage} loading={loading} sources={sources} query={collectedQuery} status={collectedStatus} sourceId={collectedSource} startDate={collectedStartDate} endDate={collectedEndDate} selectedIds={selectedCollectedIds} onQuery={setCollectedQuery} onStatus={setCollectedStatus} onSource={setCollectedSource} onStartDate={setCollectedStartDate} onEndDate={setCollectedEndDate} onToggle={(id) => setSelectedCollectedIds((current) => { if (current.includes(id)) return current.filter((value) => value !== id); if (current.length >= 100) { setError('单次最多删除 100 条采集内容'); return current } return [...current, id] })} onTogglePage={() => { const pageIds = collectedItems.map((item) => item.id); const all = pageIds.every((id) => selectedCollectedIds.includes(id)); setSelectedCollectedIds((current) => { if (all) return current.filter((id) => !pageIds.includes(id)); const additions = pageIds.filter((id) => !current.includes(id)); const available = 100 - current.length; if (additions.length > available) setError('单次最多删除 100 条采集内容'); return [...current, ...additions.slice(0, available)] }) }} onApply={() => { const filters = { query: collectedQuery, status: collectedStatus, sourceId: collectedSource, startDate: collectedStartDate, endDate: collectedEndDate }; setAppliedCollectedFilters(filters); setSelectedCollectedIds([]); setCollectedPage(1); void loadCollectedContent(1, filters) }} onReset={() => { const filters = { query: '', status: '', sourceId: '', startDate: '', endDate: '' }; setCollectedQuery(''); setCollectedStatus(''); setCollectedSource(''); setCollectedStartDate(''); setCollectedEndDate(''); setAppliedCollectedFilters(filters); setSelectedCollectedIds([]); setCollectedPage(1); void loadCollectedContent(1, filters) }} onPage={(page) => { setCollectedPage(page); void loadCollectedContent(page, appliedCollectedFilters) }} onDelete={(ids) => Modal.confirm({ title: `删除 ${ids.length} 条采集内容？`, content: '删除后原始采集记录和分析结果均无法恢复。', okText: '确认删除', cancelText: '取消', okButtonProps: { danger: true }, onOk: () => deleteCollectedItems(ids) })} />}
         {tab === 'users' && isAdmin && <UsersView users={users} loading={loading} me={me} onAdd={() => openUser()} onEdit={openUser} onDelete={(user) => Modal.confirm({ title: `删除用户「${user.username}」？`, content: '该用户将立即失去访问权限。', okText: '确认删除', cancelText: '取消', okButtonProps: { danger: true }, onOk: () => removeUser(user) })} />}
         {tab === 'database' && isAdmin && <DatabaseView data={database} loading={loading} />}
       </section>
@@ -421,7 +571,8 @@ function PageIntro({ kicker, title, copy, action }: { kicker: string; title: str
   return <div className="page-intro"><div><span className="eyebrow">{kicker}</span><h1>{title}</h1><p>{copy}</p></div>{action}</div>
 }
 
-function ContentView({ items, total, page, loading, query, startDate, endDate, minValueScore, onQuery, onStartDate, onEndDate, onMinValueScore, onOpen, onSearch, onReset, onPage }: { items: ContentItem[]; total: number; page: number; loading: boolean; query: string; startDate: string; endDate: string; minValueScore: number; onQuery: (value: string) => void; onStartDate: (value: string) => void; onEndDate: (value: string) => void; onMinValueScore: (value: number) => void; onOpen: (item: ContentItem) => void; onSearch: () => void; onReset: () => void; onPage: (page: number) => void }) {
+function ContentView({ items, total, page, loading, query, startDate, endDate, minValueScore, selectedIds, exporting, onQuery, onStartDate, onEndDate, onMinValueScore, onOpen, onToggleSelection, onToggleCurrentPage, onClearSelection, onExport, onSearch, onReset, onPage }: { items: ContentItem[]; total: number; page: number; loading: boolean; query: string; startDate: string; endDate: string; minValueScore: number; selectedIds: number[]; exporting: boolean; onQuery: (value: string) => void; onStartDate: (value: string) => void; onEndDate: (value: string) => void; onMinValueScore: (value: number) => void; onOpen: (item: ContentItem) => void; onToggleSelection: (id: number) => void; onToggleCurrentPage: () => void; onClearSelection: () => void; onExport: () => void; onSearch: () => void; onReset: () => void; onPage: (page: number) => void }) {
+  const pageSelected = items.length > 0 && items.every((item) => selectedIds.includes(item.id))
   return <>
     <PageIntro kicker="INTELLIGENCE FEED / LIVE" title="内容情报" copy="聚合监听网络中的最新信号，快速定位值得跟进的变化。" />
     <div className="feed-tools">
@@ -429,12 +580,14 @@ function ContentView({ items, total, page, loading, query, startDate, endDate, m
       <div className="date-filter"><label>开始日期<input type="date" value={startDate} max={endDate || undefined} onChange={(event) => onStartDate(event.target.value)} /></label><i>至</i><label>结束日期<input type="date" value={endDate} min={startDate || undefined} onChange={(event) => onEndDate(event.target.value)} /></label><label>最低价值<Select value={minValueScore} onChange={onMinValueScore} options={[{ value: 40, label: '观察 40+' }, { value: 60, label: '推荐 60+' }, { value: 80, label: '高价值 80+' }]} /></label><Button onClick={onSearch}>应用筛选</Button>{(query || startDate || endDate || minValueScore !== 60) && <Button type="text" onClick={onReset}>重置</Button>}</div>
       <span>{total} 条情报</span>
     </div>
+    <div className="selection-bar"><Checkbox checked={pageSelected} indeterminate={!pageSelected && items.some((item) => selectedIds.includes(item.id))} onChange={onToggleCurrentPage}>全选当前页</Checkbox><span>已选择 {selectedIds.length} 条</span>{selectedIds.length > 0 && <Button type="text" onClick={onClearSelection}>清空选择</Button>}<Button type="primary" icon={<DownloadOutlined />} disabled={selectedIds.length === 0} loading={exporting} onClick={onExport} aria-label={`导出 Markdown (${selectedIds.length})`}>导出 Markdown ({selectedIds.length})</Button></div>
     {loading ? <Loading text="正在扫描情报流..." /> : items.length === 0 ? <Empty icon={<FileSearchOutlined />} title="当前扇区没有匹配的情报。" /> : <>
-      <div className="content-grid">{items.map((item) => <article className="content-card" key={item.id} onClick={() => onOpen(item)} onKeyDown={(event) => { if (event.key === 'Enter' || event.key === ' ') onOpen(item) }} role="button" tabIndex={0}>
+      <div className="content-grid">{items.map((item) => <article className={`content-card ${selectedIds.includes(item.id) ? 'selected' : ''}`} key={item.id}>
+        <span className="card-selector" onClick={(event) => event.stopPropagation()} onKeyDown={(event) => event.stopPropagation()}><Checkbox checked={selectedIds.includes(item.id)} onChange={() => onToggleSelection(item.id)} aria-label={`选择 ${item.title}`} /></span>
         <div className="content-meta"><span>{dateText(item.published_at || item.fetched_at)}</span><span>{item.source_name}</span></div>
         <div className="score-line"><Tag color="green">测试相关 {item.testing_relevance_score ?? 0}</Tag><Tag color={(item.testing_value_score ?? 0) >= 80 ? 'gold' : 'blue'}>测试价值 {item.testing_value_score ?? 0}</Tag></div>
-        <h2>{item.title}</h2>
-        <p>{item.analysis_summary || '等待测试价值摘要'}</p><span className="read-link">查看测试情报 <ArrowRightOutlined /></span>
+        <h2><button type="button" onClick={(event) => { event.stopPropagation(); onOpen(item) }}>{item.title}</button></h2>
+        <p>{item.analysis_summary || '等待测试价值摘要'}</p><button className="read-link" type="button" onClick={() => onOpen(item)}>查看测试情报 <ArrowRightOutlined /></button>
       </article>)}</div>
       {total > 12 && <Pagination className="radar-pagination" current={page} total={total} pageSize={12} showSizeChanger={false} onChange={onPage} />}
     </>}
@@ -457,7 +610,7 @@ function IntelligenceModal({ item, onClose }: { item: ContentItem | null; onClos
   </Modal>
 }
 
-function SourcesView({ sources, total, loading, canManage, onAdd, onEndpoints, onEdit, onDelete }: { sources: Source[]; total: number; loading: boolean; canManage: boolean; onAdd: () => void; onEndpoints: (source: Source) => void; onEdit: (source: Source) => void; onDelete: (source: Source) => void }) {
+function SourcesView({ sources, total, loading, canManage, canDelete, onAdd, onEndpoints, onEdit, onDelete }: { sources: Source[]; total: number; loading: boolean; canManage: boolean; canDelete: boolean; onAdd: () => void; onEndpoints: (source: Source) => void; onEdit: (source: Source) => void; onDelete: (source: Source) => void }) {
   return <>
     <PageIntro kicker="SOURCE NETWORK / ACTIVE" title="信源管理" copy="编排可信技术信号，构建你的持续监听网络。" action={canManage && <Button type="primary" size="large" icon={<PlusOutlined />} onClick={onAdd} aria-label="新增信源">新增信源</Button>} />
     <div className="metric-strip"><div><strong>{String(total).padStart(2, '0')}</strong><span>监听节点</span></div><div><strong>{sources.filter((item) => item.trust_level >= 4).length}</strong><span>高可信信号</span></div><div className="scan-line"><span>NETWORK COVERAGE</span><i /></div></div>
@@ -466,8 +619,37 @@ function SourcesView({ sources, total, loading, canManage, onAdd, onEndpoints, o
       <div className="source-heading"><div className="source-icon"><GlobalOutlined /></div><div><span>{typeLabels[source.source_type] ?? source.source_type}</span><h2>{source.name}</h2></div></div>
       <p>{source.description || '暂无描述'}</p>{source.homepage_url && <a href={source.homepage_url} target="_blank" rel="noreferrer">{source.homepage_url}</a>}
       <div className="tag-row"><Tag color={source.trust_level >= 4 ? 'green' : 'default'}>{trustLabels[source.trust_level] ?? source.trust_level}</Tag>{source.languages.map((value) => <Tag key={value}>{value.toUpperCase()}</Tag>)}{source.topics.map((value) => <Tag key={value}>#{value}</Tag>)}</div>
-      <div className="card-actions"><Button type="text" icon={<RadarChartOutlined />} onClick={() => onEndpoints(source)}>采集端点</Button>{canManage && <><Button type="text" icon={<EditOutlined />} onClick={() => onEdit(source)}>编辑</Button><Button type="text" danger icon={<DeleteOutlined />} onClick={() => onDelete(source)}>删除</Button></>}</div>
+      <div className="card-actions"><Button type="text" icon={<RadarChartOutlined />} onClick={() => onEndpoints(source)}>采集端点</Button>{canManage && <Button type="text" icon={<EditOutlined />} onClick={() => onEdit(source)}>编辑</Button>}{canDelete && <Button type="text" danger icon={<DeleteOutlined />} onClick={() => onDelete(source)}>删除</Button>}</div>
     </article>)}</div>}
+  </>
+}
+
+function CollectedContentView({ items, total, page, loading, sources, query, status, sourceId, startDate, endDate, selectedIds, onQuery, onStatus, onSource, onStartDate, onEndDate, onToggle, onTogglePage, onApply, onReset, onPage, onDelete }: { items: CollectedItem[]; total: number; page: number; loading: boolean; sources: Source[]; query: string; status: string; sourceId: string; startDate: string; endDate: string; selectedIds: number[]; onQuery: (value: string) => void; onStatus: (value: string) => void; onSource: (value: string) => void; onStartDate: (value: string) => void; onEndDate: (value: string) => void; onToggle: (id: number) => void; onTogglePage: () => void; onApply: () => void; onReset: () => void; onPage: (page: number) => void; onDelete: (ids: number[]) => void }) {
+  const pageSelected = items.length > 0 && items.every((item) => selectedIds.includes(item.id))
+  const hasFilters = query || status || sourceId || startDate || endDate
+  return <>
+    <PageIntro kicker="COLLECTION ARCHIVE / ADMIN" title="采集管理" copy="管理自动采集的全部原始信息，包括待分析、已入雷达、已过滤和失败内容。" />
+    <div className="collection-tools">
+      <Input.Search value={query} onChange={(event) => onQuery(event.target.value)} onSearch={onApply} enterButton="查询" placeholder="查询标题或摘要" aria-label="查询采集内容" />
+      <Select value={status} onChange={onStatus} options={[{ value: '', label: '全部状态' }, ...Object.entries(analysisStatusLabels).map(([value, label]) => ({ value, label }))]} aria-label="采集分析状态" />
+      <Select value={sourceId} onChange={onSource} options={[{ value: '', label: '全部信源' }, ...sources.map((source) => ({ value: String(source.id), label: source.name }))]} aria-label="采集信源" />
+      <label>开始日期<input type="date" value={startDate} max={endDate || undefined} onChange={(event) => onStartDate(event.target.value)} /></label>
+      <label>结束日期<input type="date" value={endDate} min={startDate || undefined} onChange={(event) => onEndDate(event.target.value)} /></label>
+      <Button onClick={onApply}>应用筛选</Button>{hasFilters && <Button type="text" onClick={onReset}>重置</Button>}
+    </div>
+    <div className="collection-actions"><Checkbox checked={pageSelected} indeterminate={!pageSelected && items.some((item) => selectedIds.includes(item.id))} onChange={onTogglePage}>全选当前页</Checkbox><span>共 {total} 条，已选择 {selectedIds.length} 条</span><Button danger icon={<DeleteOutlined />} disabled={selectedIds.length === 0} onClick={() => onDelete(selectedIds)} aria-label={`批量删除 (${selectedIds.length})`}>批量删除 ({selectedIds.length})</Button></div>
+    {loading ? <Loading text="正在读取采集档案..." /> : items.length === 0 ? <Empty icon={<InboxOutlined />} title="暂无采集内容" /> : <div className="collection-table" role="table" aria-label="采集内容列表">
+      <div className="collection-row collection-head" role="row"><span>选择</span><span>内容</span><span>状态</span><span>评分</span><span>采集时间</span><span>操作</span></div>
+      {items.map((item) => <div className="collection-row" role="row" key={item.id}>
+        <Checkbox checked={selectedIds.includes(item.id)} onChange={() => onToggle(item.id)} aria-label={`选择采集内容 ${item.title}`} />
+        <div className="collection-title"><strong>{item.title}</strong><small>{item.source_name}</small>{item.analysis_error && <em title={item.analysis_error}>{item.analysis_error}</em>}</div>
+        <Tag className="collection-status" color={item.analysis_status === 'analyzed' ? 'green' : item.analysis_status === 'failed' ? 'red' : item.analysis_status === 'filtered' ? 'default' : 'blue'}>{analysisStatusLabels[item.analysis_status]}</Tag>
+        <span className="collection-score" data-label="相关/价值">{item.testing_relevance_score ?? '-'} / {item.testing_value_score ?? '-'}</span>
+        <time className="collection-time" data-label="采集时间">{dateText(item.fetched_at)}</time>
+        <Button type="text" danger icon={<DeleteOutlined />} aria-label={`删除采集内容 ${item.title}`} onClick={() => onDelete([item.id])} />
+      </div>)}
+    </div>}
+    {total > 20 && <Pagination className="radar-pagination" current={page} total={total} pageSize={20} showSizeChanger={false} onChange={onPage} />}
   </>
 }
 
@@ -520,7 +702,7 @@ function UserDrawer({ open, editing, form, saving, error, onClose, onSave }: { o
 function EndpointDrawer({ open, source, endpoints, form, saving, canManage, onClose, onSave, onDelete }: { open: boolean; source: Source | null; endpoints: Endpoint[]; form: FormInstance<EndpointForm>; saving: boolean; canManage: boolean; onClose: () => void; onSave: (values: EndpointForm) => void; onDelete: (endpoint: Endpoint) => void }) {
   return <Drawer title={<><span className="drawer-kicker">FETCH COORDINATES</span><strong>{source?.name ?? '采集端点'}</strong></>} size="large" open={open} onClose={onClose} destroyOnHidden>
     <p className="drawer-copy">RSS/Atom 适合持续订阅；网页类型会把指定页面作为单条内容定期更新检查。</p>
-    <div className="endpoint-list">{endpoints.length === 0 ? <span>尚未配置采集端点</span> : endpoints.map((endpoint) => <article key={endpoint.id}><div><strong>{endpoint.name}</strong><small>{endpoint.endpoint_type.toUpperCase()} · 每 {endpoint.fetch_interval_minutes} 分钟 · {endpoint.health_status}</small><a href={endpoint.url} target="_blank" rel="noreferrer">{endpoint.url}</a></div>{canManage && <Button type="text" danger icon={<DeleteOutlined />} aria-label={`删除端点 ${endpoint.name}`} onClick={() => onDelete(endpoint)} />}</article>)}</div>
+    <div className="endpoint-list">{endpoints.length === 0 ? <span>尚未配置采集端点</span> : endpoints.map((endpoint) => <article key={endpoint.id}><div><strong>{endpoint.name}</strong><small>{endpoint.endpoint_type.toUpperCase()} · 每 {endpoint.fetch_interval_minutes} 分钟 · {endpoint.health_status}</small><a href={endpoint.url} target="_blank" rel="noreferrer">{endpoint.url}</a></div>{canManage && <Button type="text" danger icon={<DeleteOutlined />} aria-label={`删除端点 ${endpoint.name}`} onClick={() => Modal.confirm({ title: `删除端点「${endpoint.name}」？`, content: '删除后采集配置及其运行历史无法恢复。', okText: '确认删除', cancelText: '取消', okButtonProps: { danger: true }, onOk: () => onDelete(endpoint) })} />}</article>)}</div>
     {canManage && <Form form={form} layout="vertical" initialValues={{ endpoint_type: 'rss', fetch_interval_minutes: 360, max_items_per_run: 50 }} onFinish={onSave}>
       <Form.Item label="端点名称" name="name" rules={[{ required: true, message: '请输入端点名称' }]}><Input placeholder="官方 RSS" /></Form.Item>
       <div className="form-pair"><Form.Item label="采集类型" name="endpoint_type" rules={[{ required: true }]}><Select options={[{ value: 'rss', label: 'RSS / Atom' }, { value: 'web', label: '网页' }]} /></Form.Item><Form.Item label="采集间隔（分钟）" name="fetch_interval_minutes" rules={[{ required: true }]}><Input type="number" min={15} max={10080} /></Form.Item></div>

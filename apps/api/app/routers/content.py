@@ -1,16 +1,52 @@
 from datetime import datetime
 from typing import Annotated
 
-from fastapi import APIRouter, HTTPException, Query, status
+from fastapi import APIRouter, HTTPException, Query, Response, status
 from sqlalchemy import func, or_, select
 from sqlalchemy.orm import selectinload
 
 from app.config import settings
 from app.dependencies import CurrentUser, DbSession
 from app.models import ContentItem
-from app.schemas import ContentItemResponse, ContentListResponse
+from app.reporting import render_markdown_report
+from app.schemas import ContentExportRequest, ContentItemResponse, ContentListResponse
 
 router = APIRouter(prefix="/content", tags=["content"])
+
+
+@router.post("/export")
+def export_content(
+    payload: ContentExportRequest, db: DbSession, _user: CurrentUser
+) -> Response:
+    content_ids = list(dict.fromkeys(payload.content_ids))
+    items = list(
+        db.scalars(
+            select(ContentItem)
+            .options(selectinload(ContentItem.source))
+            .where(
+                ContentItem.id.in_(content_ids),
+                ContentItem.analysis_status == "analyzed",
+                ContentItem.testing_relevance_score >= settings.testing_relevance_threshold,
+            )
+        )
+    )
+    items_by_id = {item.id: item for item in items}
+    if any(content_id not in items_by_id for content_id in content_ids):
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail="One or more content items are unavailable for export",
+        )
+    ordered_items = [items_by_id[content_id] for content_id in content_ids]
+    filename = f"testing-intelligence-report-{datetime.now().strftime('%Y%m%d')}.md"
+    return Response(
+        content=render_markdown_report(ordered_items),
+        media_type="text/markdown",
+        headers={
+            "Content-Disposition": f'attachment; filename="{filename}"',
+            "Cache-Control": "no-store",
+            "X-Content-Type-Options": "nosniff",
+        },
+    )
 
 
 @router.get("", response_model=ContentListResponse)
