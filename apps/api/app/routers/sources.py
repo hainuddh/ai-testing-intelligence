@@ -2,7 +2,15 @@ from fastapi import APIRouter, HTTPException, Query, status
 from sqlalchemy import func, select, text
 from sqlalchemy.exc import IntegrityError
 
-from app.dependencies import AdminUser, CurrentUser, DbSession, MaintainerUser
+from app.cache import cache_key, delete_prefix_sync, get_json, set_json
+from app.config import settings
+from app.dependencies import (
+    AdminUser,
+    AsyncDbSession,
+    CurrentUserAsync,
+    DbSession,
+    MaintainerUser,
+)
 from app.models import Source, SourceEndpoint
 from app.schemas import (
     EndpointCreate,
@@ -43,21 +51,32 @@ def create_source(payload: SourceCreate, db: DbSession, user: MaintainerUser) ->
             status_code=status.HTTP_409_CONFLICT, detail="Source name already exists"
         ) from exc
     db.refresh(source)
+    delete_prefix_sync("sources:list")
     return source
 
 
 @router.get("", response_model=SourceListResponse)
-def list_sources(
-    db: DbSession,
-    _user: CurrentUser,
+async def list_sources(
+    db: AsyncDbSession,
+    _user: CurrentUserAsync,
     offset: int = Query(default=0, ge=0),
     limit: int = Query(default=50, ge=1, le=200),
 ) -> SourceListResponse:
-    total = db.scalar(select(func.count()).select_from(Source)) or 0
+    key = cache_key("sources:list", offset=offset, limit=limit)
+    cached = await get_json(key)
+    if cached is not None:
+        return SourceListResponse.model_validate(cached)
+    total = await db.scalar(select(func.count()).select_from(Source)) or 0
     items = list(
-        db.scalars(select(Source).order_by(Source.created_at.desc()).offset(offset).limit(limit))
+        (
+            await db.scalars(
+                select(Source).order_by(Source.created_at.desc()).offset(offset).limit(limit)
+            )
+        ).all()
     )
-    return SourceListResponse(items=items, total=total)
+    response = SourceListResponse(items=items, total=total)
+    await set_json(key, response.model_dump(mode="json"), settings.sources_cache_ttl)
+    return response
 
 
 @router.patch("/{source_id}", response_model=SourceResponse)
@@ -89,6 +108,7 @@ def update_source(
             status_code=status.HTTP_409_CONFLICT, detail="Source name already exists"
         ) from exc
     db.refresh(source)
+    delete_prefix_sync("sources:list")
     return source
 
 
@@ -100,6 +120,10 @@ def delete_source(source_id: int, db: DbSession, _user: AdminUser) -> None:
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Source not found")
     db.delete(source)
     db.commit()
+    delete_prefix_sync("sources:list")
+    delete_prefix_sync("content:list")
+    delete_prefix_sync("content:item")
+    delete_prefix_sync("collected:list")
 
 
 @router.post(
@@ -130,18 +154,30 @@ def create_endpoint(
 
 
 @router.get("/{source_id}/endpoints", response_model=list[EndpointResponse])
-def list_endpoints(
-    source_id: int, db: DbSession, _user: CurrentUser
+async def list_endpoints(
+    source_id: int, db: AsyncDbSession, _user: CurrentUserAsync
 ) -> list[SourceEndpoint]:
-    if db.get(Source, source_id) is None:
+    key = cache_key("sources:endpoints", source_id=source_id)
+    cached = await get_json(key)
+    if cached is not None:
+        return [EndpointResponse.model_validate(item) for item in cached]
+    if await db.get(Source, source_id) is None:
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Source not found")
-    return list(
-        db.scalars(
-            select(SourceEndpoint)
-            .where(SourceEndpoint.source_id == source_id)
-            .order_by(SourceEndpoint.created_at.desc())
-        )
+    items = list(
+        (
+            await db.scalars(
+                select(SourceEndpoint)
+                .where(SourceEndpoint.source_id == source_id)
+                .order_by(SourceEndpoint.created_at.desc())
+            )
+        ).all()
     )
+    await set_json(
+        key,
+        [EndpointResponse.model_validate(item).model_dump(mode="json") for item in items],
+        settings.sources_cache_ttl,
+    )
+    return items
 
 
 @router.delete("/{source_id}/endpoints/{endpoint_id}", status_code=status.HTTP_204_NO_CONTENT)
@@ -161,3 +197,5 @@ def delete_endpoint(
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Endpoint not found")
     db.delete(endpoint)
     db.commit()
+    delete_prefix_sync("sources:endpoints")
+    delete_prefix_sync("sources:list")

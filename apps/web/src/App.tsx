@@ -135,6 +135,9 @@ export default function App() {
   const [selectedCollectedIds, setSelectedCollectedIds] = useState<number[]>([])
   const [appliedCollectedFilters, setAppliedCollectedFilters] = useState({ query: '', status: '', sourceId: '', startDate: '', endDate: '' })
   const collectedRequestId = useRef(0)
+  const contentRequestId = useRef(0)
+  const contentCache = useRef<Map<string, { items: ContentItem[]; total: number; ts: number }>>(new Map())
+  const CACHE_TTL = 30_000
   const [database, setDatabase] = useState<DatabaseCounts | null>(null)
   const [loading, setLoading] = useState(false)
   const [saving, setSaving] = useState(false)
@@ -192,21 +195,31 @@ export default function App() {
   }, [token])
 
   const loadContent = async (page = contentPage, search = query, start = startDate, end = endDate, valueScore = minValueScore) => {
+    const params = new URLSearchParams({ offset: String((page - 1) * 12), limit: '12' })
+    if (search) params.set('query', search)
+    if (start) params.set('start_at', dateBoundary(start))
+    if (end) params.set('end_at', dateBoundary(end, true))
+    if (valueScore) params.set('min_value_score', String(valueScore))
+    const cacheKey = params.toString()
+    const hit = contentCache.current.get(cacheKey)
+    if (hit && Date.now() - hit.ts < CACHE_TTL) {
+      setContent(hit.items)
+      setContentTotal(hit.total)
+    }
+    const requestId = ++contentRequestId.current
     setLoading(true)
     setError('')
     try {
-      const params = new URLSearchParams({ offset: String((page - 1) * 12), limit: '12' })
-      if (search) params.set('query', search)
-      if (start) params.set('start_at', dateBoundary(start))
-      if (end) params.set('end_at', dateBoundary(end, true))
-      if (valueScore) params.set('min_value_score', String(valueScore))
       const data = await request<{ items: ContentItem[]; total: number }>(`/api/v1/content?${params}`)
+      if (requestId !== contentRequestId.current) return
+      contentCache.current.set(cacheKey, { items: data.items, total: data.total, ts: Date.now() })
       setContent(data.items)
       setContentTotal(data.total)
     } catch (requestError) {
+      if (requestId !== contentRequestId.current) return
       setError(requestError instanceof Error ? requestError.message : '加载内容失败')
     } finally {
-      setLoading(false)
+      if (requestId === contentRequestId.current) setLoading(false)
     }
   }
 
@@ -581,8 +594,8 @@ function ContentView({ items, total, page, loading, query, startDate, endDate, m
       <span>{total} 条情报</span>
     </div>
     <div className="selection-bar"><Checkbox checked={pageSelected} indeterminate={!pageSelected && items.some((item) => selectedIds.includes(item.id))} onChange={onToggleCurrentPage}>全选当前页</Checkbox><span>已选择 {selectedIds.length} 条</span>{selectedIds.length > 0 && <Button type="text" onClick={onClearSelection}>清空选择</Button>}<Button type="primary" icon={<DownloadOutlined />} disabled={selectedIds.length === 0} loading={exporting} onClick={onExport} aria-label={`导出 Markdown (${selectedIds.length})`}>导出 Markdown ({selectedIds.length})</Button></div>
-    {loading ? <Loading text="正在扫描情报流..." /> : items.length === 0 ? <Empty icon={<FileSearchOutlined />} title="当前扇区没有匹配的情报。" /> : <>
-      <div className="content-grid">{items.map((item) => <article className={`content-card ${selectedIds.includes(item.id) ? 'selected' : ''}`} key={item.id}>
+    {loading && items.length === 0 ? <Loading text="正在扫描情报流..." /> : items.length === 0 ? <Empty icon={<FileSearchOutlined />} title="当前扇区没有匹配的情报。" /> : <>
+      <div className={`content-grid${loading ? ' is-refreshing' : ''}`}>{items.map((item) => <article className={`content-card ${selectedIds.includes(item.id) ? 'selected' : ''}`} key={item.id}>
         <span className="card-selector" onClick={(event) => event.stopPropagation()} onKeyDown={(event) => event.stopPropagation()}><Checkbox checked={selectedIds.includes(item.id)} onChange={() => onToggleSelection(item.id)} aria-label={`选择 ${item.title}`} /></span>
         <div className="content-meta"><span>{dateText(item.published_at || item.fetched_at)}</span><span>{item.source_name}</span></div>
         <div className="score-line"><Tag color="green">测试相关 {item.testing_relevance_score ?? 0}</Tag><Tag color={(item.testing_value_score ?? 0) >= 80 ? 'gold' : 'blue'}>测试价值 {item.testing_value_score ?? 0}</Tag></div>

@@ -3,9 +3,11 @@ from typing import Annotated, Literal
 
 from fastapi import APIRouter, HTTPException, Query, status
 from sqlalchemy import func, or_, select, text
-from sqlalchemy.orm import selectinload
+from sqlalchemy.orm import defer, selectinload
 
-from app.dependencies import AdminUser, DbSession
+from app.cache import cache_key, delete_prefix_sync, get_json, set_json
+from app.config import settings
+from app.dependencies import AdminUser, AdminUserAsync, AsyncDbSession, DbSession
 from app.models import ContentItem
 from app.schemas import (
     CollectedContentListResponse,
@@ -24,9 +26,9 @@ def wait_for_content_workers(db: DbSession) -> None:
 
 
 @router.get("", response_model=CollectedContentListResponse)
-def list_collected_content(
-    db: DbSession,
-    _admin: AdminUser,
+async def list_collected_content(
+    db: AsyncDbSession,
+    _admin: AdminUserAsync,
     offset: int = Query(default=0, ge=0),
     limit: int = Query(default=50, ge=1, le=200),
     query: str | None = Query(default=None, min_length=1, max_length=200),
@@ -58,27 +60,48 @@ def list_collected_content(
         filters.append(ContentItem.fetched_at >= start_at)
     if end_at is not None:
         filters.append(ContentItem.fetched_at <= end_at)
-    rows = db.execute(
+    key = cache_key(
+        "collected:list",
+        offset=offset,
+        limit=limit,
+        query=query,
+        status=analysis_status,
+        source_id=source_id,
+        start_at=start_at,
+        end_at=end_at,
+    )
+    cached = await get_json(key)
+    if cached is not None:
+        return CollectedContentListResponse.model_validate(cached)
+    rows = await db.execute(
         select(ContentItem, func.count().over().label("total"))
-        .options(selectinload(ContentItem.source))
+        .options(selectinload(ContentItem.source), defer(ContentItem.body))
         .where(*filters)
         .order_by(ContentItem.fetched_at.desc(), ContentItem.id.desc())
         .offset(offset)
         .limit(limit)
-    ).all()
-    items = [row[0] for row in rows]
-    total = rows[0][1] if rows else 0
-    return CollectedContentListResponse(items=items, total=total)
+    )
+    result = rows.all()
+    items = [row[0] for row in result]
+    total = result[0][1] if result else 0
+    response = CollectedContentListResponse(items=items, total=total)
+    await set_json(key, response.model_dump(mode="json"), settings.content_cache_ttl)
+    return response
 
 
 @router.delete("/{content_id}", status_code=status.HTTP_204_NO_CONTENT)
-def delete_collected_content(content_id: int, db: DbSession, _admin: AdminUser) -> None:
+def delete_collected_content(
+    content_id: int, db: DbSession, _admin: AdminUser
+) -> None:
     wait_for_content_workers(db)
     item = db.get(ContentItem, content_id)
     if item is None:
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Content item not found")
     db.delete(item)
     db.commit()
+    delete_prefix_sync("content:list")
+    delete_prefix_sync("content:item")
+    delete_prefix_sync("collected:list")
 
 
 @router.post("/bulk-delete", response_model=ContentBulkDeleteResponse)
@@ -96,4 +119,7 @@ def bulk_delete_collected_content(
     for item in items:
         db.delete(item)
     db.commit()
+    delete_prefix_sync("content:list")
+    delete_prefix_sync("content:item")
+    delete_prefix_sync("collected:list")
     return ContentBulkDeleteResponse(deleted=len(items))

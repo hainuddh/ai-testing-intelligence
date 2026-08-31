@@ -47,6 +47,8 @@ PostgreSQL、Redis、MinIO 和 FastAPI 端口均未直接向公网开放。宿�
 - `MINIO_ROOT_PASSWORD`
 - `ATI_JWT_SECRET`
 
+`.env` 中另有可选缓存配置（`ATI_REDIS_URL`、`ATI_CONTENT_CACHE_TTL` 等），默认值已适配 2 GB 内存服务器，详见 `docs/deployment-zh.md`。
+
 禁止将 `.env` 内容写入文档、Git、聊天记录或工单。
 
 配置校验：
@@ -72,10 +74,12 @@ docker compose up -d --build
 | 服务 | 作用 | 对宿主机开放 |
 | --- | --- | --- |
 | `web` | Nginx、React 静态资源、API 反向代理 | `127.0.0.1:8080` |
-| `api` | FastAPI | 否，仅 Compose 网络 `8000` |
+| `api` | FastAPI（异步读路径 + Redis 缓存） | 否，仅 Compose 网络 `8000` |
 | `postgres` | PostgreSQL 17 + pgvector | 否 |
-| `redis` | Redis 8 | 否 |
+| `redis` | Redis 8，缓存列表/详情/统计结果，限 128MB | 否 |
 | `minio` | MinIO | 否 |
+
+各服务均已设置 `mem_limit`，PostgreSQL 已收敛 `shared_buffers`/`work_mem`/`max_connections`，适配 2 GB 内存服务器。
 
 检查状态：
 
@@ -409,6 +413,8 @@ df -h / /var/lib/docker
 4. **代理权限**：systemd 用户服务通过 `sudo` 启动监听 443 的 Python 进程。后续建议使用 Caddy/Nginx，或为代理配置最小化端口绑定能力，减少 root 进程。
 5. **日志轮转**：`deploy/https_proxy.log` 当前未配置 logrotate，需防止日志长期增长占满磁盘。
 6. **数据库迁移**：当前应用已使用 Alembic，`migrate` 服务必须以 `Exited (0)` 完成后 API 和 Worker 才能启动。升级前仍须备份并检查迁移脚本。
+7. **缓存依赖 Redis**：读路径列表/详情/统计依赖 Redis 缓存。Redis 故障时读路径自动降级直查数据库，功能可用但会变慢；升级或扩容 Redis 时留意 `ATI_REDIS_URL`。
+8. **低内存运维**：服务器仅 2 GB 内存。升级后检查 `docker stats` 确认各容器内存未持续触顶；若 Postgres 内存紧张，优先检查长事务和慢查询，不要盲目调大 `shared_buffers`。
 
 ## 12. 上线完成判定
 
@@ -421,4 +427,5 @@ df -h / /var/lib/docker
 - HTTPS 健康接口返回 `{"status":"ok"}`；
 - `work-tracker-proxy.service` 为 `inactive`、`disabled`；
 - 磁盘有足够可用空间；
-- Certbot 模拟续期通过，或已经部署其他可靠的证书自动续期方案。
+- Certbot 模拟续期通过，或已经部署其他可靠的证书自动续期方案；
+- Redis 缓存可达：`docker compose exec api python -c "from app.cache import get_json; import asyncio; print(asyncio.run(get_json('health:check')))"` 不报错即可（返回 `None` 正常，Redis 可达且降级未触发即算通过）。

@@ -9,11 +9,11 @@ Docker Compose 会启动以下服务：
 | 服务 | 用途 | 对宿主机开放端口 |
 | --- | --- | --- |
 | `web` | Nginx、前端静态资源和 API 反向代理 | `8080` |
-| `api` | FastAPI 应用 | 无 |
-| `worker` | 定时采集 RSS/Atom 和网页内容 | 无 |
+| `api` | FastAPI 应用（异步读路径 + Redis 缓存） | 无 |
+| `worker` | 定时采集 RSS/Atom 和网页内容，分析后失效缓存 | 无 |
 | `migrate` | 启动前执行一次数据库迁移 | 无 |
 | `postgres` | PostgreSQL 17 和 pgvector | 无 |
-| `redis` | Redis 8 | 无 |
+| `redis` | Redis 8，缓存列表查询结果和内容版本 | 无 |
 | `minio` | MinIO 对象存储 | 无 |
 
 浏览器访问 `web`，`web` 将 `/api/` 请求转发给内部的 `api:8000`。PostgreSQL、Redis、MinIO 和 API 默认只在 Compose 内部网络可访问。
@@ -24,11 +24,19 @@ Docker Compose 会启动以下服务：
 
 - Ubuntu 22.04/24.04 或其他支持 Docker Engine 的 Linux 发行版
 - 2 核 CPU
-- 4 GB 内存
+- 4 GB 内存（最低 2 GB，并建议配置适当 swap）
 - 20 GB 以上可用磁盘空间
 - Docker Engine 24 或更高版本
 - Docker Compose v2
 - 可选：域名及指向服务器公网 IP 的 DNS 记录
+
+针对 2 GB 内存的低配服务器，`compose.yaml` 已包含以下优化：
+
+- PostgreSQL 配置 `shared_buffers=256MB`、`work_mem=4MB`、`max_connections=30`，降低每连接内存占用；
+- Redis 限制 `--maxmemory 128mb --maxmemory-policy allkeys-lru`，防止缓存无限膨胀；
+- 各容器设置 `mem_limit`，避免单个服务耗尽整机内存触发 swap 抖动；
+- API 数据库连接池收敛到 `pool_size=3, max_overflow=3`，Worker 使用 `1,1`；
+- 读路径异步化（`async def` + `AsyncSession`），列表查询延迟加载 `body` 大字段，并通过 Redis 缓存列表、详情和统计结果。
 
 检查 Docker：
 
@@ -83,6 +91,25 @@ MINIO_ROOT_USER=ati-minio
 MINIO_ROOT_PASSWORD=<第二个随机值>
 ATI_JWT_SECRET=<第三个随机值>
 ```
+
+`.env.example` 还包含以下可选性能与缓存配置，默认值适用于 2 GB 内存服务器，通常无需修改：
+
+```dotenv
+# Redis 缓存地址（Compose 内置，默认指向 redis 服务）
+ATI_REDIS_URL=redis://redis:6379/0
+# 内容情报/采集管理列表与详情缓存时长（秒）
+ATI_CONTENT_CACHE_TTL=30
+# 数据库状态统计缓存时长（秒）
+ATI_DATABASE_CACHE_TTL=60
+# 信源列表缓存时长（秒）
+ATI_SOURCES_CACHE_TTL=30
+# API 数据库连接池大小（低内存服务器建议 3 以内）
+ATI_DB_POOL_SIZE=3
+# API 数据库连接池溢出上限
+ATI_DB_MAX_OVERFLOW=3
+```
+
+`ATI_REDIS_URL` 为空时，缓存层自动降级为直查数据库，功能不受影响，但会失去缓存加速能力。若在 Compose 之外手动运行 API，需将 `ATI_REDIS_URL` 指向实际的 Redis 实例。
 
 注意事项：
 
@@ -344,9 +371,9 @@ docker compose up -d
 
 ## 11. 更新应用
 
-更新前先备份数据库，并阅读目标版本的发布说明。当前项目尚未提供数据库迁移工具，因此涉及模型或表结构变化的版本不能仅依靠重新构建完成升级。
+更新前先备份数据库，并阅读目标版本的发布说明。项目已使用 Alembic 版本化迁移，升级时会由 `migrate` 服务自动执行迁移；但涉及表结构或索引变化的版本，仍应在执行前人工审查迁移脚本，必要时先在隔离环境演练。
 
-不涉及数据库结构变化时：
+常规升级步骤：
 
 ```bash
 git fetch --all --tags
@@ -357,7 +384,7 @@ docker compose ps
 docker compose logs --tail 200 migrate api worker web
 ```
 
-更新后重新执行健康检查和登录、查询、创建信源等冒烟测试。
+更新后重新执行健康检查，并确认 `migrate` 服务为 `Exited (0)`。若本次升级引入了缓存相关改动，建议在升级后执行 `docker compose restart api worker`，让缓存版本号与代码保持一致。之后做登录、查询、创建信源等冒烟测试。
 
 ## 12. 数据备份
 
@@ -479,7 +506,10 @@ ports:
 - 登录接口尚无应用级限流；公网部署应至少在边界代理或 WAF 增加限流。
 - 非 Compose 启动存在开发用 JWT 默认值；生产环境必须显式设置 `ATI_JWT_SECRET`。
 - 数据库密码直接进入连接 URL，应使用不含 URL 保留字符的十六进制随机值。
-- 当前 Compose 未定义 CPU、内存限制、集中日志、指标采集和告警。
+- 缓存依赖 Redis；若 Redis 故障，读路径会自动降级直查数据库，但会失去缓存加速。
+- 内容列表缓存通过 Worker 采集/分析后主动失效，最长滞后一个 Worker 轮询周期（默认 60 秒）加网络往返。
+- 登录、写入类操作（信源/用户/采集删除）不缓存，保持强一致。
+- 已为各服务设置内存上限并收敛连接池，但尚未提供集中日志、指标采集和告警。
 - 应建立补丁更新、离线备份、恢复演练和密钥轮换流程后再承载重要数据。
 
 ## 15. 卸载

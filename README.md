@@ -103,3 +103,21 @@ analysis result, but does not delete the source or collection endpoint.
 
 Source deletion is admin-only because it cascades collected content. Maintainers can still
 create and edit sources and manage collection endpoints.
+
+## Performance & Caching
+
+The API uses an async read path (`async def` + `AsyncSession`) and caches list, detail, and
+statistics responses in Redis to reduce database load on memory-constrained hosts.
+
+- List queries for the intelligence feed, collected content, sources, and the database
+  status page are cached in Redis with short TTLs (default 30–60s).
+- The worker invalidates feed caches immediately after fetching or analyzing new content.
+- Cache writes for the read path are non-blocking; if Redis is unreachable the API silently
+  falls back to direct queries.
+- List queries defer loading the large `body` column to reduce per-request memory.
+- `compose.yaml` ships tuned PostgreSQL settings, Redis `maxmemory`, per-container memory
+  limits, and a small database connection pool suitable for a 2 GB server.
+
+Set `ATI_REDIS_URL` in `.env` to enable caching (default `redis://redis:6379/0` in Compose).
+Leaving it empty disables caching without affecting functionality. See
+[docs/deployment-zh.md](docs/deployment-zh.md) for the full environment reference.

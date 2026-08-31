@@ -1,6 +1,24 @@
 services:
   postgres:
     image: pgvector/pgvector:pg17
+    command:
+      - postgres
+      - -c
+      - shared_buffers=256MB
+      - -c
+      - effective_cache_size=768MB
+      - -c
+      - work_mem=4MB
+      - -c
+      - maintenance_work_mem=64MB
+      - -c
+      - max_connections=30
+      - -c
+      - random_page_cost=1.1
+      - -c
+      - max_wal_size=512MB
+      - -c
+      - min_wal_size=128MB
     environment:
       POSTGRES_DB: ${POSTGRES_DB:-ai_testing_intelligence}
       POSTGRES_USER: ${POSTGRES_USER:-ati}
@@ -13,10 +31,21 @@ services:
       timeout: 5s
       retries: 5
     restart: unless-stopped
+    mem_limit: 768m
+    pids_limit: 200
 
   redis:
     image: redis:8-alpine
-    command: ["redis-server", "--appendonly", "yes"]
+    command:
+      - redis-server
+      - --appendonly
+      - "yes"
+      - --maxmemory
+      - 128mb
+      - --maxmemory-policy
+      - allkeys-lru
+      - --maxmemory-samples
+      - "5"
     volumes:
       - redis_data:/data
     healthcheck:
@@ -25,6 +54,8 @@ services:
       timeout: 5s
       retries: 5
     restart: unless-stopped
+    mem_limit: 192m
+    pids_limit: 100
 
   minio:
     image: minio/minio:RELEASE.2025-07-23T15-54-02Z
@@ -35,19 +66,30 @@ services:
     volumes:
       - minio_data:/data
     restart: unless-stopped
+    mem_limit: 256m
+    pids_limit: 100
 
   api:
     build: ./apps/api
+    command: ["uvicorn", "app.main:app", "--host", "0.0.0.0", "--port", "8000"]
     environment:
       ATI_DATABASE_URL: postgresql+psycopg://${POSTGRES_USER:-ati}:${POSTGRES_PASSWORD}@postgres:5432/${POSTGRES_DB:-ai_testing_intelligence}
       ATI_JWT_SECRET: ${ATI_JWT_SECRET:?Set ATI_JWT_SECRET in .env}
       ATI_TESTING_RELEVANCE_THRESHOLD: ${ATI_TESTING_RELEVANCE_THRESHOLD:-60}
+      ATI_REDIS_URL: redis://redis:6379/0
+      ATI_CONTENT_CACHE_TTL: ${ATI_CONTENT_CACHE_TTL:-30}
+      ATI_DATABASE_CACHE_TTL: ${ATI_DATABASE_CACHE_TTL:-60}
+      ATI_SOURCES_CACHE_TTL: ${ATI_SOURCES_CACHE_TTL:-30}
+      ATI_DB_POOL_SIZE: ${ATI_DB_POOL_SIZE:-3}
+      ATI_DB_MAX_OVERFLOW: ${ATI_DB_MAX_OVERFLOW:-3}
     depends_on:
       migrate:
         condition: service_completed_successfully
       redis:
         condition: service_healthy
     restart: unless-stopped
+    mem_limit: 512m
+    pids_limit: 100
 
   migrate:
     build: ./apps/api
@@ -58,6 +100,7 @@ services:
       postgres:
         condition: service_healthy
     restart: "no"
+    mem_limit: 256m
 
   worker:
     build: ./apps/api
@@ -70,10 +113,15 @@ services:
       ATI_ANALYSIS_BATCH_SIZE: ${ATI_ANALYSIS_BATCH_SIZE:-10}
       ATI_TESTING_RELEVANCE_THRESHOLD: ${ATI_TESTING_RELEVANCE_THRESHOLD:-60}
       ATI_ANALYSIS_FETCH_FULL_CONTENT: ${ATI_ANALYSIS_FETCH_FULL_CONTENT:-false}
+      ATI_REDIS_URL: redis://redis:6379/0
+      ATI_DB_POOL_SIZE: 1
+      ATI_DB_MAX_OVERFLOW: 1
     depends_on:
       migrate:
         condition: service_completed_successfully
     restart: unless-stopped
+    mem_limit: 512m
+    pids_limit: 100
 
   web:
     build: ./apps/web
@@ -82,6 +130,8 @@ services:
     depends_on:
       - api
     restart: unless-stopped
+    mem_limit: 128m
+    pids_limit: 100
 
 volumes:
   postgres_data:

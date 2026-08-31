@@ -18,6 +18,12 @@ class Settings(BaseSettings):
     analysis_batch_size: int = 10
     testing_relevance_threshold: int = 60
     analysis_fetch_full_content: bool = False
+    redis_url: str = ""
+    content_cache_ttl: int = 30
+    database_cache_ttl: int = 60
+    sources_cache_ttl: int = 30
+    db_pool_size: int = 3
+    db_max_overflow: int = 3
 
     model_config = SettingsConfigDict(env_file=".env", env_prefix="ATI_", extra="ignore")
 

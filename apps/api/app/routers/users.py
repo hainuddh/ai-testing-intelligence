@@ -2,6 +2,7 @@ from fastapi import APIRouter, HTTPException, Query, status
 from sqlalchemy import func, select
 from sqlalchemy.exc import IntegrityError
 
+from app.cache import delete_prefix_sync
 from app.dependencies import AdminUser, DbSession
 from app.models import Source, User
 from app.schemas import AdminUserResponse, UserCreate, UserListResponse, UserUpdate
@@ -56,6 +57,7 @@ def create_user(payload: UserCreate, db: DbSession, _admin: AdminUser) -> User:
             status_code=status.HTTP_409_CONFLICT, detail="Username already exists"
         ) from exc
     db.refresh(user)
+    delete_prefix_sync("database:status")
     return user
 
 
@@ -97,6 +99,7 @@ def update_user(user_id: int, payload: UserUpdate, db: DbSession, admin: AdminUs
             status_code=status.HTTP_409_CONFLICT, detail="Username already exists"
         ) from exc
     db.refresh(user)
+    delete_prefix_sync("database:status")
     return user
 
 
@@ -122,3 +125,4 @@ def delete_user(user_id: int, db: DbSession, admin: AdminUser) -> None:
         )
     db.delete(user)
     db.commit()
+    delete_prefix_sync("database:status")

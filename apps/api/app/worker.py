@@ -6,6 +6,7 @@ from sqlalchemy import func, select, text
 from sqlalchemy.orm import Session
 
 from app.analyzer import analyze_pending
+from app.cache import delete_prefix_sync
 from app.config import settings
 from app.database import engine
 from app.fetcher import fetch_endpoint
@@ -51,14 +52,20 @@ def run_analysis() -> None:
                 lock_connection.execute(text("SELECT pg_advisory_unlock(82429102)"))
     if analyzed or failed:
         logger.info("Analyzed content succeeded=%s failed=%s", analyzed, failed)
+    if analyzed:
+        delete_prefix_sync("content:list")
+        delete_prefix_sync("content:item")
 
 
 def run_once() -> None:
     if engine.dialect.name != "postgresql":
         with Session(engine) as db:
+            any_created = False
             for endpoint in due_endpoints(db):
                 try:
                     run = fetch_endpoint(db, endpoint)
+                    if run.items_created > 0:
+                        any_created = True
                     logger.info(
                         "Fetched endpoint=%s status=%s items_created=%s",
                         endpoint.name,
@@ -69,6 +76,9 @@ def run_once() -> None:
                     db.rollback()
                     logger.exception("Unhandled fetch failure endpoint_id=%s", endpoint.id)
         run_analysis()
+        if any_created:
+            delete_prefix_sync("content:list")
+            delete_prefix_sync("collected:list")
         return
 
     with engine.connect() as lock_connection:
@@ -76,9 +86,12 @@ def run_once() -> None:
             return
         try:
             with Session(engine) as db:
+                any_created = False
                 for endpoint in due_endpoints(db):
                     try:
                         run = fetch_endpoint(db, endpoint)
+                        if run.items_created > 0:
+                            any_created = True
                         logger.info(
                             "Fetched endpoint=%s status=%s items_created=%s",
                             endpoint.name,
@@ -91,6 +104,9 @@ def run_once() -> None:
         finally:
             lock_connection.execute(text("SELECT pg_advisory_unlock(82429101)"))
     run_analysis()
+    if any_created:
+        delete_prefix_sync("content:list")
+        delete_prefix_sync("collected:list")
 
 
 def main() -> None:
