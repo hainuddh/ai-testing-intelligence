@@ -74,14 +74,15 @@ def list_content(
     if source_id is not None:
         filters.append(ContentItem.source_id == source_id)
     if query is not None:
-        pattern = f"%{query}%"
+        escaped_query = query.replace("\\", "\\\\").replace("%", "\\%").replace("_", "\\_")
+        pattern = f"%{escaped_query}%"
         filters.append(
             or_(
-                ContentItem.title.ilike(pattern),
-                ContentItem.summary.ilike(pattern),
-                ContentItem.body.ilike(pattern),
-                ContentItem.analysis_summary.ilike(pattern),
-                ContentItem.testing_value_analysis.ilike(pattern),
+                ContentItem.title.ilike(pattern, escape="\\"),
+                ContentItem.summary.ilike(pattern, escape="\\"),
+                ContentItem.body.ilike(pattern, escape="\\"),
+                ContentItem.analysis_summary.ilike(pattern, escape="\\"),
+                ContentItem.testing_value_analysis.ilike(pattern, escape="\\"),
             )
         )
     effective_at = func.coalesce(ContentItem.published_at, ContentItem.fetched_at)
@@ -89,21 +90,20 @@ def list_content(
         filters.append(effective_at >= start_at)
     if end_at is not None:
         filters.append(effective_at <= end_at)
-    total = db.scalar(select(func.count()).select_from(ContentItem).where(*filters)) or 0
-    items = list(
-        db.scalars(
-            select(ContentItem)
-            .options(selectinload(ContentItem.source))
-            .where(*filters)
-            .order_by(
-                ContentItem.testing_value_score.desc(),
-                ContentItem.fetched_at.desc(),
-                ContentItem.id.desc(),
-            )
-            .offset(offset)
-            .limit(limit)
+    rows = db.execute(
+        select(ContentItem, func.count().over().label("total"))
+        .options(selectinload(ContentItem.source))
+        .where(*filters)
+        .order_by(
+            ContentItem.testing_value_score.desc(),
+            ContentItem.fetched_at.desc(),
+            ContentItem.id.desc(),
         )
-    )
+        .offset(offset)
+        .limit(limit)
+    ).all()
+    items = [row[0] for row in rows]
+    total = rows[0][1] if rows else 0
     return ContentListResponse(items=items, total=total)
 
 

@@ -58,17 +58,16 @@ def list_collected_content(
         filters.append(ContentItem.fetched_at >= start_at)
     if end_at is not None:
         filters.append(ContentItem.fetched_at <= end_at)
-    total = db.scalar(select(func.count()).select_from(ContentItem).where(*filters)) or 0
-    items = list(
-        db.scalars(
-            select(ContentItem)
-            .options(selectinload(ContentItem.source))
-            .where(*filters)
-            .order_by(ContentItem.fetched_at.desc(), ContentItem.id.desc())
-            .offset(offset)
-            .limit(limit)
-        )
-    )
+    rows = db.execute(
+        select(ContentItem, func.count().over().label("total"))
+        .options(selectinload(ContentItem.source))
+        .where(*filters)
+        .order_by(ContentItem.fetched_at.desc(), ContentItem.id.desc())
+        .offset(offset)
+        .limit(limit)
+    ).all()
+    items = [row[0] for row in rows]
+    total = rows[0][1] if rows else 0
     return CollectedContentListResponse(items=items, total=total)
 
 
