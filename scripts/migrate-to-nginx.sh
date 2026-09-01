@@ -9,10 +9,10 @@ PUBLIC_HEALTH_URL="${ATI_PUBLIC_HEALTH_URL:-https://${DOMAIN}/api/v1/health}"
 CERT_DIR="${ATI_CERT_DIR:-/etc/letsencrypt/live/${DOMAIN}}"
 ACME_ROOT="${ATI_ACME_ROOT:-/var/www/certbot}"
 SITE_NAME="ai-testing-intelligence.conf"
-SITE_AVAILABLE="/etc/nginx/sites-available/${SITE_NAME}"
-SITE_ENABLED="/etc/nginx/sites-enabled/${SITE_NAME}"
+SITE_AVAILABLE=""
+SITE_ENABLED=""
 NGINX_CONF="/etc/nginx/nginx.conf"
-NGINX_BIN="${ATI_NGINX_BIN:-/usr/sbin/nginx}"
+NGINX_BIN="${ATI_NGINX_BIN:-}"
 PROXY_MARKER="${ATI_NGINX_MARKER:-/etc/ai-testing-intelligence/nginx-proxy.enabled}"
 CERTBOT_HOOK="/etc/letsencrypt/renewal-hooks/deploy/reload-nginx.sh"
 BACKUP_ROOT="${ATI_NGINX_BACKUP_DIR:-${PROJECT_DIR}/backups/nginx-migration}"
@@ -30,6 +30,8 @@ SITE_WAS_ENABLED=0
 MARKER_WAS_PRESENT=0
 CERTBOT_HOOK_WAS_PRESENT=0
 MIGRATION_COMPLETE=0
+PACKAGE_MANAGER=""
+SELINUX_BOOLEAN_CHANGED=0
 
 log() {
     printf '[%(%F %T)T] %s\n' -1 "$*"
@@ -55,7 +57,7 @@ usage() {
   ATI_PROJECT_DIR=/home/admin/ai-testing-intelligence
   ATI_DOMAIN=api.ddhlf.xyz
   ATI_CERT_DIR=/etc/letsencrypt/live/api.ddhlf.xyz
-  ATI_SKIP_APT_UPDATE=1              跳过 apt-get update
+  ATI_SKIP_PACKAGE_UPDATE=1          跳过软件包索引更新
   ATI_SKIP_CERTBOT_RECONFIGURE=1    跳过 Certbot webroot 迁移
 
 脚本会安装 Nginx、备份原配置、写入低内存配置、切换 443、执行健康检查，
@@ -95,6 +97,16 @@ preflight() {
         || fail "可用内存仅 ${available_memory_mb} MB，迁移至少需要 ${MIN_AVAILABLE_MEMORY_MB} MB"
     log "资源检查通过：磁盘 ${free_mb} MB，可用内存 ${available_memory_mb} MB"
 
+    if command -v apt-get >/dev/null 2>&1; then
+        PACKAGE_MANAGER="apt-get"
+    elif command -v dnf >/dev/null 2>&1; then
+        PACKAGE_MANAGER="dnf"
+    elif command -v yum >/dev/null 2>&1; then
+        PACKAGE_MANAGER="yum"
+    elif [[ -z "${NGINX_BIN}" || ! -x "${NGINX_BIN}" ]]; then
+        fail "未找到 apt-get、dnf 或 yum，无法自动安装 Nginx"
+    fi
+
     if sudo systemctl is-active --quiet nginx 2>/dev/null; then
         NGINX_WAS_ACTIVE=1
     fi
@@ -107,9 +119,6 @@ preflight() {
     if systemctl --user is-enabled --quiet "${LEGACY_PROXY_SERVICE}" 2>/dev/null; then
         LEGACY_WAS_ENABLED=1
     fi
-    if [[ -e "${SITE_ENABLED}" || -L "${SITE_ENABLED}" ]]; then
-        SITE_WAS_ENABLED=1
-    fi
     if sudo test -f "${PROXY_MARKER}"; then
         MARKER_WAS_PRESENT=1
     fi
@@ -119,19 +128,59 @@ preflight() {
 }
 
 install_nginx() {
-    if sudo test -x "${NGINX_BIN}"; then
+    if [[ -z "${NGINX_BIN}" ]]; then
+        NGINX_BIN="$(command -v nginx 2>/dev/null || true)"
+        [[ -n "${NGINX_BIN}" ]] || NGINX_BIN="/usr/sbin/nginx"
+    fi
+    if [[ -n "${NGINX_BIN}" ]] && sudo test -x "${NGINX_BIN}"; then
         log "Nginx 已安装，跳过安装"
-        return
+    else
+        case "${PACKAGE_MANAGER}" in
+            apt-get)
+                if [[ "${ATI_SKIP_PACKAGE_UPDATE:-${ATI_SKIP_APT_UPDATE:-0}}" != "1" ]]; then
+                    log "更新 APT 软件索引"
+                    sudo apt-get update
+                fi
+                log "通过 APT 安装最小化 Nginx 包"
+                sudo env DEBIAN_FRONTEND=noninteractive apt-get install -y --no-install-recommends nginx
+                ;;
+            dnf)
+                if [[ "${ATI_SKIP_PACKAGE_UPDATE:-0}" != "1" ]]; then
+                    log "刷新 DNF 软件仓库缓存"
+                    sudo dnf makecache
+                fi
+                log "通过 DNF 安装 Nginx 包"
+                sudo dnf install -y nginx
+                ;;
+            yum)
+                if [[ "${ATI_SKIP_PACKAGE_UPDATE:-0}" != "1" ]]; then
+                    log "刷新 YUM 软件仓库缓存"
+                    sudo yum makecache
+                fi
+                log "通过 YUM 安装 Nginx 包"
+                sudo yum install -y nginx
+                ;;
+            *)
+                fail "无法识别可用的软件包管理器"
+                ;;
+        esac
     fi
 
-    require_command apt-get
-    if [[ "${ATI_SKIP_APT_UPDATE:-0}" != "1" ]]; then
-        log "更新 APT 软件索引"
-        sudo apt-get update
-    fi
-    log "安装最小化 Nginx 包"
-    sudo env DEBIAN_FRONTEND=noninteractive apt-get install -y --no-install-recommends nginx
     sudo test -x "${NGINX_BIN}" || fail "Nginx 安装失败"
+
+    if sudo test -d /etc/nginx/sites-available && sudo test -d /etc/nginx/sites-enabled; then
+        SITE_AVAILABLE="/etc/nginx/sites-available/${SITE_NAME}"
+        SITE_ENABLED="/etc/nginx/sites-enabled/${SITE_NAME}"
+    elif sudo test -d /etc/nginx/conf.d; then
+        SITE_AVAILABLE="/etc/nginx/conf.d/${SITE_NAME}"
+        SITE_ENABLED="${SITE_AVAILABLE}"
+    else
+        fail "无法识别 Nginx 站点配置目录"
+    fi
+    if sudo test -e "${SITE_ENABLED}" || sudo test -L "${SITE_ENABLED}"; then
+        SITE_WAS_ENABLED=1
+    fi
+    log "Nginx 布局：二进制 ${NGINX_BIN}，站点配置 ${SITE_ENABLED}"
 }
 
 backup_nginx() {
@@ -139,10 +188,10 @@ backup_nginx() {
     mkdir -p "${BACKUP_DIR}"
     chmod 700 "${BACKUP_DIR}"
     sudo cp -a "${NGINX_CONF}" "${BACKUP_DIR}/nginx.conf"
-    if [[ -e "${SITE_AVAILABLE}" ]]; then
+    if sudo test -e "${SITE_AVAILABLE}"; then
         sudo cp -a "${SITE_AVAILABLE}" "${BACKUP_DIR}/site.available"
     fi
-    if (( SITE_WAS_ENABLED )); then
+    if (( SITE_WAS_ENABLED )) && [[ "${SITE_ENABLED}" != "${SITE_AVAILABLE}" ]]; then
         sudo cp -a "${SITE_ENABLED}" "${BACKUP_DIR}/site.enabled"
     fi
     if sudo test -f "/etc/letsencrypt/renewal/${DOMAIN}.conf"; then
@@ -151,7 +200,7 @@ backup_nginx() {
     if (( CERTBOT_HOOK_WAS_PRESENT )); then
         sudo cp -a "${CERTBOT_HOOK}" "${BACKUP_DIR}/certbot-deploy-hook"
     fi
-    if [[ -e /etc/nginx/sites-enabled/default || -L /etc/nginx/sites-enabled/default ]]; then
+    if sudo test -e /etc/nginx/sites-enabled/default || sudo test -L /etc/nginx/sites-enabled/default; then
         sudo cp -a /etc/nginx/sites-enabled/default "${BACKUP_DIR}/default.enabled"
     fi
     log "Nginx 配置已备份到 ${BACKUP_DIR}"
@@ -254,11 +303,27 @@ EOF
 
     sudo install -d -o root -g root -m 0755 "${ACME_ROOT}/.well-known/acme-challenge"
     sudo install -o root -g root -m 0644 "${temp_site}" "${SITE_AVAILABLE}"
-    sudo ln -sfn "${SITE_AVAILABLE}" "${SITE_ENABLED}"
-    sudo rm -f /etc/nginx/sites-enabled/default
+    if [[ "${SITE_ENABLED}" != "${SITE_AVAILABLE}" ]]; then
+        sudo ln -sfn "${SITE_AVAILABLE}" "${SITE_ENABLED}"
+        sudo rm -f /etc/nginx/sites-enabled/default
+    fi
     sudo "${NGINX_BIN}" -t
     rm -f "${temp_conf}" "${temp_site}"
     log "低内存 Nginx 配置校验通过"
+}
+
+configure_selinux() {
+    if ! command -v getenforce >/dev/null 2>&1 || [[ "$(getenforce)" != "Enforcing" ]]; then
+        return
+    fi
+    require_command getsebool
+    require_command setsebool
+    if [[ "$(getsebool httpd_can_network_connect 2>/dev/null | awk '{print $3}')" == "on" ]]; then
+        return
+    fi
+    log "SELinux 为 Enforcing，允许 Nginx 连接本机 Docker Web 上游"
+    sudo setsebool -P httpd_can_network_connect 1
+    SELINUX_BOOLEAN_CHANGED=1
 }
 
 wait_local_tls_health() {
@@ -287,7 +352,9 @@ rollback() {
         else
             sudo rm -f "${SITE_AVAILABLE}" || true
         fi
-        sudo rm -f "${SITE_ENABLED}" || true
+        if [[ "${SITE_ENABLED}" != "${SITE_AVAILABLE}" ]]; then
+            sudo rm -f "${SITE_ENABLED}" || true
+        fi
         if [[ -e "${BACKUP_DIR}/site.enabled" || -L "${BACKUP_DIR}/site.enabled" ]]; then
             sudo cp -a "${BACKUP_DIR}/site.enabled" "${SITE_ENABLED}" || true
         fi
@@ -326,6 +393,9 @@ rollback() {
         sudo cp -a "${BACKUP_DIR}/certbot-deploy-hook" "${CERTBOT_HOOK}" || true
     else
         sudo rm -f "${CERTBOT_HOOK}" || true
+    fi
+    if (( SELINUX_BOOLEAN_CHANGED )); then
+        sudo setsebool -P httpd_can_network_connect 0 || true
     fi
     if (( LEGACY_WAS_ACTIVE )) && ! systemctl --user is-active --quiet "${LEGACY_PROXY_SERVICE}"; then
         printf '警告：旧代理未能恢复，请立即检查服务和 443 端口。\n' >&2
@@ -430,6 +500,7 @@ main() {
     install_nginx
     backup_nginx
     configure_nginx
+    configure_selinux
     switch_proxy
     configure_certbot
     complete_migration

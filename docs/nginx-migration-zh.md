@@ -27,6 +27,7 @@ Nginx 是替换 Python 代理，而不是与它长期并行运行。迁移成功
 - 登录接口按来源 IP 限制为每分钟 5 次，限流区与连接限制区合计 2 MB；
 - 不安装推荐包和额外 Nginx 模块；
 - 不启用响应缓存、Lua、ModSecurity 等额外功能。
+- RHEL/Alibaba Cloud Linux 如果启用了 SELinux Enforcing，脚本只开启 Nginx 访问本机 HTTP 上游所需的 `httpd_can_network_connect` 布尔值，迁移失败时恢复原值。
 
 低并发时，Nginx Master 加 1 个 Worker 通常只需要十几 MB 常驻内存。旧 Python 代理停止后，总常驻内存一般不会增加。最终应以服务器上的 `ps`、`free` 和 `docker stats` 实测为准。
 
@@ -34,7 +35,7 @@ Nginx 是替换 Python 代理，而不是与它长期并行运行。迁移成功
 
 执行前确认：
 
-- 操作系统为 Debian/Ubuntu，使用 `apt-get`；
+- 操作系统提供 `apt-get`、`dnf` 或 `yum`，支持 Debian、Ubuntu、RHEL 系和 Alibaba Cloud Linux；
 - 当前部署用户可以执行 `sudo`；
 - Compose 应用已经运行；
 - `http://127.0.0.1:8080/api/v1/health` 正常；
@@ -71,10 +72,10 @@ ATI_DOMAIN=intelligence.example.com \
 ./scripts/migrate-to-nginx.sh
 ```
 
-网络受限且 APT 索引已经更新时，可以跳过 `apt-get update`：
+网络受限且软件仓库索引已经更新时，可以跳过 `apt-get update`、`dnf makecache` 或 `yum makecache`：
 
 ```bash
-ATI_SKIP_APT_UPDATE=1 ./scripts/migrate-to-nginx.sh
+ATI_SKIP_PACKAGE_UPDATE=1 ./scripts/migrate-to-nginx.sh
 ```
 
 暂时不迁移 Certbot 续期方式时：
@@ -89,10 +90,10 @@ ATI_SKIP_CERTBOT_RECONFIGURE=1 ./scripts/migrate-to-nginx.sh
 
 1. 校验项目目录、域名、证书、私钥、命令和本地健康接口。
 2. 记录 Nginx和旧 Python 代理迁移前的运行、启用状态。
-3. 通过 `apt-get install --no-install-recommends nginx` 安装最小化 Nginx。
+3. 自动识别 `apt-get`、`dnf` 或 `yum` 并安装 Nginx；Debian 系使用最小化安装参数。
 4. 将原 Nginx 主配置、站点配置和 Certbot 续期配置备份到 `backups/nginx-migration/<时间>/`。
-5. 将 Nginx 收敛为 1 个 Worker 和 512 个连接。
-6. 写入 HTTP ACME Challenge、HTTPS证书和到 `127.0.0.1:8080` 的代理配置。
+5. 自动识别 Debian 的 `sites-enabled` 或 RHEL/Alibaba Cloud Linux 的 `conf.d` 布局，并将 Nginx 收敛为 1 个 Worker 和 512 个连接。
+6. 写入 HTTP ACME Challenge、HTTPS证书和到 `127.0.0.1:8080` 的代理配置；SELinux Enforcing 环境按需允许该上游连接。
 7. 运行 `nginx -t`，配置无效时不会切换流量。
 8. 停止旧 Python 代理，启动 Nginx，并用 `curl --resolve` 强制访问本机 443，避免 DNS、CDN 或 WAF 造成误判。
 9. HTTPS 检查通过后，禁用旧 Python 代理。
