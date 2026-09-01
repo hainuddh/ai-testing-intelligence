@@ -153,6 +153,10 @@ sudo certbot renew --cert-name api.ddhlf.xyz --dry-run
 
 如果模拟续期仍收到 HTTP 403，应检查阿里云安全组、TCP 80、DNS、WAF/CDN 和域名转发。Nginx 迁移本身不能绕过云端返回的 403。
 
+对于未备案且部署在中国大陆节点的域名，HTTP-01 可能持续被公网入口返回 `403`。此时应使用 `ATI_SKIP_CERTBOT_RECONFIGURE=1` 完成 Nginx迁移，并改用 `acme.sh + DNS API` 的 DNS-01 签发和续期，不应反复强制请求 HTTP-01。当前生产环境的实际过程、AliDNS经验和成功判定参见 `docs/go-live-operations-zh.md` 的“DNS-01 证书签发经验”。
+
+证书临期、自动续期失败或已经过期时的处理命令，参见 `docs/go-live-operations-zh.md` 的“证书临期或过期处理”。DNS-01不依赖旧证书和公网 80，因此证书即使已经过期仍可恢复，但 `--force`只用于紧急恢复，不得加入日常 Cron。
+
 ## 8. 手工回退
 
 仅在 Nginx 已确认故障时执行：

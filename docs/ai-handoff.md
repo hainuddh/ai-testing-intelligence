@@ -6,7 +6,7 @@ worktree remain the source of truth; verify them before starting work.
 ## Current State
 
 - Branch: `main`
-- Latest verified commit: `e64c939` (`Fix 409 conflict on user creation: pre-check, detailed error message, frontend detail display`)
+- Latest verified commit: `9b9eb9b` (`Validate ACME challenge routing`)
 - Working tree at handoff creation: clean
 - Deployment: Docker Compose
 - Production resource constraint: 2 GB RAM with swap enabled
@@ -28,6 +28,7 @@ worktree remain the source of truth; verify them before starting work.
 
 - Fixed the custom HTTPS proxy to relay both directions continuously, so browser keep-alive requests such as `/auth/me` are no longer held behind the previous response's 30-second read timeout.
 - Added `scripts/migrate-to-nginx.sh` for a guarded, low-memory Nginx migration with apt/dnf/yum and Nginx layout detection, DNF/YUM exclude fallback, SELinux-aware ACME Webroot access, local/public HTTP challenge preflight, automatic rollback, and old/new Certbot compatibility. `scripts/ops.sh` now manages Nginx after detecting the migrated site.
+- Production migrated to low-memory host Nginx. Because the unfiled mainland-hosted domain receives HTTP-01 `403`, certificate issuance moved to `acme.sh + AliDNS DNS-01`; basic issuance and deployment checks passed without storing credentials in the repository.
 - `e64c939`: improved user-creation conflict diagnostics and frontend error-detail display.
 - `c2a5fc8`: pinned Python/Node dependencies and added Docker pip/npm cache mounts and mirrors.
 - `34d56f1`: added async read paths, Redis caching, low-memory connection pools, and container limits.
@@ -44,10 +45,10 @@ worktree remain the source of truth; verify them before starting work.
   docker compose restart api worker
   ```
 
-- After deploying the HTTPS proxy keep-alive fix, restart the host proxy service:
+- After Nginx configuration or certificate changes, validate and reload the host proxy:
 
   ```bash
-  systemctl --user restart ai-testing-intelligence-proxy.service
+  sudo /usr/sbin/nginx -t && sudo systemctl reload nginx
   ```
 
 - Redis and pip/npm registries are configurable through environment/build arguments documented in `docs/deployment-zh.md`.
@@ -60,9 +61,8 @@ worktree remain the source of truth; verify them before starting work.
 
 ## Known Follow-ups
 
-- Deploy the Nginx migration documented in `docs/nginx-migration-zh.md`, then verify login reaches `/api/v1/auth/me` without repeated 30-second delays. The Python proxy fix remains only as a rollback improvement.
+- After the first natural acme.sh renewal, verify AliDNS TXT cleanup, installed and live certificate serial equality, and successful Nginx reload.
 - Confirm the production user-creation conflict now displays the backend detail instead of only `请求失败 (409)`.
-- Resolve the documented Certbot renewal failure before certificate expiry.
 - Add centralized metrics/alerts for container memory, swap, disk, PostgreSQL latency, and Redis availability.
 - Periodically review pinned Python/Node versions and update lock metadata intentionally rather than during ordinary builds.
 

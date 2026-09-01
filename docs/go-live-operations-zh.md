@@ -23,7 +23,7 @@
   |
   | HTTPS https://api.ddhlf.xyz:443
   v
-ai-testing-intelligence-proxy.service
+宿主机 Nginx（1 个 Worker）
   |
   | HTTP http://127.0.0.1:8080
   v
@@ -126,114 +126,180 @@ systemctl --user is-active work-tracker-proxy.service
 
 本次仅停用 work-tracker 的 HTTPS 代理，没有删除 `/home/admin/work-tracker` 项目目录和数据。确认不再需要后，另行制定归档或删除方案。
 
-## 6. AI Testing Intelligence HTTPS 代理
+## 6. Nginx HTTPS 入口
 
-HTTPS 代理脚本：
+生产入口已从自定义 Python HTTPS 代理迁移到宿主机 Nginx，Docker内部结构不变。由于 HTTP-01 无法通过，实际迁移使用现有证书并跳过 Certbot：
+
+```bash
+cd /home/admin/ai-testing-intelligence
+ATI_SKIP_PACKAGE_UPDATE=1 \
+ATI_SKIP_CERTBOT_RECONFIGURE=1 \
+bash scripts/migrate-to-nginx.sh
+```
+
+脚本迁移过程中处理了以下 Alibaba Cloud Linux差异：
+
+- 系统使用 `dnf`，而不是 Debian/Ubuntu的 `apt-get`；
+- `nginx` 被 DNF `exclude` 规则过滤，脚本只对该次安装临时使用 `--disableexcludes=all`；
+- Nginx站点目录为 `/etc/nginx/conf.d`，而不是 `sites-enabled`；
+- SELinux Enforcing环境需要允许 Nginx读取 Webroot并连接 `127.0.0.1:8080`；
+- 服务器 Certbot版本较旧，不支持 `reconfigure`。
+
+当前站点配置：
+
+```text
+/etc/nginx/conf.d/ai-testing-intelligence.conf
+```
+
+低内存配置保持 1 个 Worker、512 个连接、8 条上游保活连接和 1 MB SSL Session Cache。旧 `ai-testing-intelligence-proxy.service` 已停止并禁用，不与 Nginx同时常驻。
+
+日常检查：
+
+```bash
+sudo /usr/sbin/nginx -t
+sudo systemctl is-active nginx
+sudo systemctl is-enabled nginx
+systemctl --user is-active ai-testing-intelligence-proxy.service
+systemctl --user is-enabled ai-testing-intelligence-proxy.service
+sudo ss -ltnp '( sport = :80 or sport = :443 or sport = :8080 )'
+ps -C nginx -o pid,rss,cmd
+```
+
+预期 Nginx为 `active`、`enabled`，Python代理为 `inactive`、`disabled`，80/443 由 Nginx监听，8080 仍只绑定 `127.0.0.1`。
+
+旧 Python代理保留为应急回退实现：
 
 ```text
 /home/admin/ai-testing-intelligence/deploy/https_proxy.py
-```
-
-systemd 用户服务：
-
-```text
 /home/admin/.config/systemd/user/ai-testing-intelligence-proxy.service
 ```
 
-关键配置：
+## 7. DNS-01 证书签发经验
 
-```text
-BACKEND_HOST=127.0.0.1
-BACKEND_PORT=8080
-LISTEN_PORT=443
-CERT_FILE=/etc/letsencrypt/live/api.ddhlf.xyz/fullchain.pem
-KEY_FILE=/etc/letsencrypt/live/api.ddhlf.xyz/privkey.pem
-LOG_FILE=/home/admin/ai-testing-intelligence/deploy/https_proxy.log
-```
+### 7.1 HTTP-01 失败结论
 
-启动并设置开机自启：
-
-```bash
-systemctl --user daemon-reload
-systemctl --user enable --now ai-testing-intelligence-proxy.service
-```
-
-日常管理：
-
-```bash
-systemctl --user status ai-testing-intelligence-proxy.service
-systemctl --user restart ai-testing-intelligence-proxy.service
-systemctl --user stop ai-testing-intelligence-proxy.service
-```
-
-查看日志：
-
-```bash
-journalctl --user -u ai-testing-intelligence-proxy.service -n 200 --no-pager
-```
-
-代理自身还会写入：
-
-```text
-/home/admin/ai-testing-intelligence/deploy/https_proxy.log
-```
-
-确认端口归属：
-
-```bash
-sudo ss -ltnp '( sport = :443 or sport = :8080 )'
-```
-
-预期：
-
-- `443`：`deploy/https_proxy.py` 对应的 Python 进程
-- `127.0.0.1:8080`：Docker Web 端口映射
-
-## 7. HTTPS 证书
-
-当前证书：
-
-```text
-/etc/letsencrypt/live/api.ddhlf.xyz/fullchain.pem
-/etc/letsencrypt/live/api.ddhlf.xyz/privkey.pem
-```
-
-查看证书：
-
-```bash
-sudo certbot certificates
-```
-
-证书更新后，运行中的 Python 代理不会自动重新加载证书，需要重启：
-
-```bash
-systemctl --user restart ai-testing-intelligence-proxy.service
-```
-
-### 已知证书续期问题
-
-现有 Certbot 使用 `standalone` 验证方式。执行以下模拟续期：
-
-```bash
-sudo certbot renew --dry-run
-```
-
-本次返回失败，Let's Encrypt 从公网访问以下地址时收到 HTTP `403`：
+迁移过程依次确认了 Nginx配置、本机 HTTPS、Webroot、SELinux上下文和旧版 Certbot兼容流程正常，但 Let's Encrypt从外部访问以下地址持续收到 HTTP `403`：
 
 ```text
 http://api.ddhlf.xyz/.well-known/acme-challenge/<token>
 ```
 
-因此，证书自动续期目前不能视为可靠。后续运维必须在证书到期前处理以下事项：
+ICP备案系统未查询到 `ddhlf.xyz`。服务器位于中国大陆节点，因此不再依赖公网 80 和 HTTP-01，也不让证书续期阻塞 Nginx迁移。
 
-1. 确认阿里云安全组允许公网 TCP `80`。
-2. 确认域名 `api.ddhlf.xyz` 的 A 记录指向 `39.102.75.100`。
-3. 检查是否有云 WAF、CDN、域名转发或其他边界规则返回 `403`。
-4. Alibaba Cloud Linux 启用 SELinux Enforcing 时，确认 `/var/www/certbot` 使用 `httpd_sys_content_t` 上下文；迁移脚本会自动设置并在请求 Certbot 前验证随机 Challenge 文件。
-5. 修复后重新运行 `sudo certbot renew --dry-run`，必须看到模拟续期成功。
-6. 为 Certbot 增加成功续期后的代理重启 hook，或迁移到 Caddy/Nginx 统一管理 HTTPS。
+### 7.2 最终签发方案
 
-在续期问题解决前，应定期执行 `sudo certbot certificates` 检查到期时间。
+最终采用 `acme.sh + AliDNS DNS-01`：
+
+- 创建专用阿里云 RAM API用户并授予最小 AliDNS记录管理权限；
+- AccessKey只保存在 root 的 acme.sh配置中，文件权限为 `600`；
+- 使用 `dns_ali` 自动创建和清理 `_acme-challenge.api.ddhlf.xyz` TXT记录；
+- 先使用 Staging验证 DNS API，再签发正式 ECDSA P-256证书；
+- acme.sh不常驻内存，只在签发或续期时短暂运行，适合 2 GB服务器。
+
+关键命令：
+
+```bash
+# 测试 DNS API；Ali_Key/Ali_Secret必须在同一个 root Shell中加载
+/root/.acme.sh/acme.sh --issue --staging --dns dns_ali -d api.ddhlf.xyz
+
+# 正式签发；从 Staging切换到正式证书时只使用一次 --force
+/root/.acme.sh/acme.sh --issue --server letsencrypt \
+  --dns dns_ali -d api.ddhlf.xyz --keylength ec-256 --force
+
+/root/.acme.sh/acme.sh --list
+```
+
+如果输出 `Domains not changed` 和下次续期时间，不代表失败；先检查已有证书是 Staging还是真实 Let’s Encrypt。不要反复使用 `--force`，避免消耗正式签发额度。
+
+证书应通过 `--install-cert` 安装到 Nginx固定目录，不能让 Nginx直接读取 `/root/.acme.sh`：
+
+```text
+/etc/nginx/ssl/api.ddhlf.xyz/fullchain.pem
+/etc/nginx/ssl/api.ddhlf.xyz/privkey.pem
+```
+
+安装时设置 `--reloadcmd "systemctl reload nginx"`，使续期后的证书复制和 Nginx Reload自动完成。
+
+### 7.3 成功判定与长期维护
+
+本次基本检查已经通过。后续使用以下命令复核：
+
+```bash
+/root/.acme.sh/acme.sh --list
+sudo crontab -l
+sudo /usr/sbin/nginx -t
+curl --fail https://api.ddhlf.xyz/api/v1/health
+openssl x509 -in /etc/nginx/ssl/api.ddhlf.xyz/fullchain.pem \
+  -noout -issuer -serial -dates
+echo | openssl s_client -connect api.ddhlf.xyz:443 \
+  -servername api.ddhlf.xyz 2>/dev/null \
+  | openssl x509 -noout -issuer -serial -dates
+```
+
+磁盘证书与线上证书的序列号和有效期必须一致，root Cron中应存在 acme.sh `--cron` 任务。第一次自然续期后，再确认 AliDNS TXT记录自动创建/删除、证书复制和 Nginx Reload均成功。
+
+旧 Certbot配置暂时保留作为历史回退，但不再作为主续期方案；确认 acme.sh长期稳定前不要删除 `/etc/letsencrypt`。严禁把 RAM AccessKey、Secret、`account.conf` 内容或调试日志中的签名参数写入 Git、文档、聊天或工单。
+
+### 7.4 证书临期或过期处理
+
+正常情况下不应等到证书过期再处理。root Cron每天调用 acme.sh检查续期窗口，只有接近续期时间时才通过 AliDNS创建 TXT记录、签发证书、复制到 Nginx固定目录并执行 Reload；acme.sh不是常驻服务，不会持续占用内存。
+
+首先确认自动续期的三个前提：
+
+```bash
+sudo crontab -l
+/root/.acme.sh/acme.sh --list
+grep -E '^(Le_RealFullChainPath|Le_RealKeyPath|Le_ReloadCmd)=' \
+  /root/.acme.sh/api.ddhlf.xyz_ecc/api.ddhlf.xyz.conf 2>/dev/null
+```
+
+预期 root Cron存在 acme.sh `--cron` 任务，域名记录显示下次续期时间，安装路径指向 `/etc/nginx/ssl/api.ddhlf.xyz`，Reload命令为 `systemctl reload nginx`。AliDNS凭据必须已保存且 `account.conf` 权限为 `600`，但检查时只能确认变量名，不得打印真实值：
+
+```bash
+grep -E '^(SAVED_)?Ali_(Key|Secret)=' /root/.acme.sh/account.conf \
+  | sed 's/=.*/=<已隐藏>/'
+stat -c '%a %U:%G %n' /root/.acme.sh/account.conf
+```
+
+日常检查剩余有效期：
+
+```bash
+openssl x509 -in /etc/nginx/ssl/api.ddhlf.xyz/fullchain.pem \
+  -noout -issuer -dates
+echo | openssl s_client -connect api.ddhlf.xyz:443 \
+  -servername api.ddhlf.xyz 2>/dev/null \
+  | openssl x509 -noout -issuer -dates
+```
+
+如果证书临近到期但自动续期未执行，先运行 Cron流程并观察错误，不要直接反复强制签发：
+
+```bash
+/root/.acme.sh/acme.sh --cron --home /root/.acme.sh --debug 2
+```
+
+重点检查 RAM AccessKey状态、AliDNS权限、域名托管账号、服务器时间、证书安装路径和 Nginx Reload。确需紧急恢复时只执行一次强制续期：
+
+```bash
+/root/.acme.sh/acme.sh --renew -d api.ddhlf.xyz --ecc --force
+sudo /usr/sbin/nginx -t
+sudo systemctl reload nginx
+curl --fail https://api.ddhlf.xyz/api/v1/health
+```
+
+如果证书已经过期，DNS-01仍可签发新证书，因为它不依赖旧 HTTPS证书或公网 80：
+
+```bash
+/root/.acme.sh/acme.sh --issue --server letsencrypt \
+  --dns dns_ali -d api.ddhlf.xyz --keylength ec-256 --force
+/root/.acme.sh/acme.sh --install-cert -d api.ddhlf.xyz --ecc \
+  --key-file /etc/nginx/ssl/api.ddhlf.xyz/privkey.pem \
+  --fullchain-file /etc/nginx/ssl/api.ddhlf.xyz/fullchain.pem \
+  --reloadcmd "systemctl reload nginx"
+```
+
+恢复后必须重新比较磁盘和线上证书序列号，并确认 HTTPS健康接口正常。`--force`会消耗正式签发额度，只用于首次从 Staging切换或紧急恢复，不得加入日常 Cron。
+
+建议配置证书剩余 15 天告警。仅写入系统日志但无人接收不算有效告警，应接入阿里云云监控、邮件、钉钉、企业微信或现有告警平台。
 
 ## 8. 上线验证记录
 
@@ -278,12 +344,14 @@ curl --fail http://127.0.0.1:8080/api/v1/health
 curl --resolve api.ddhlf.xyz:443:127.0.0.1 \
   --fail https://api.ddhlf.xyz/api/v1/health
 
-# HTTPS 代理服务
+# HTTPS 入口与旧代理
+sudo systemctl is-active nginx
+sudo systemctl is-enabled nginx
 systemctl --user is-active ai-testing-intelligence-proxy.service
 systemctl --user is-enabled ai-testing-intelligence-proxy.service
 ```
 
-预期：两个健康检查都返回 `{"status":"ok"}`，代理服务返回 `active` 和 `enabled`。
+预期：两个健康检查都返回 `{"status":"ok"}`；Nginx返回 `active`、`enabled`，旧 Python 代理返回 `inactive`、`disabled`。
 
 ## 9. 运维脚本与日常命令
 
@@ -381,7 +449,7 @@ docker compose down -v
 ### 公网域名打不开
 
 ```bash
-systemctl --user status ai-testing-intelligence-proxy.service
+sudo systemctl status nginx
 sudo ss -ltnp '( sport = :443 )'
 curl --resolve api.ddhlf.xyz:443:127.0.0.1 -v \
   https://api.ddhlf.xyz/api/v1/health
@@ -417,13 +485,12 @@ df -h / /var/lib/docker
 ## 11. 当前风险与待办
 
 1. **磁盘容量风险**：上线期间根分区曾达到约 `98%`，PostgreSQL 日志出现过 `No space left on device`。应立即清理无用日志、Docker 缓存和旧文件，并设置磁盘监控；清理前不要误删数据库卷。
-2. **证书续期风险**：Certbot `standalone` 模拟续期收到公网 HTTP `403`，必须修复并重新验证。
-3. **代理实现限制**：当前 Python 代理已支持 HTTP keep-alive 连接的双向流式转发，避免登录后的权限请求被延迟；但它仍用于延续既有部署，长期建议迁移到 Caddy 或 Nginx，以获得更可靠的 TLS、证书续期、访问日志和反向代理能力。
-4. **代理权限**：systemd 用户服务通过 `sudo` 启动监听 443 的 Python 进程。后续建议使用 Caddy/Nginx，或为代理配置最小化端口绑定能力，减少 root 进程。
-5. **日志轮转**：`deploy/https_proxy.log` 当前未配置 logrotate，需防止日志长期增长占满磁盘。
-6. **数据库迁移**：当前应用已使用 Alembic，`migrate` 服务必须以 `Exited (0)` 完成后 API 和 Worker 才能启动。升级前仍须备份并检查迁移脚本。
-7. **缓存依赖 Redis**：读路径列表/详情/统计依赖 Redis 缓存。Redis 故障时读路径自动降级直查数据库，功能可用但会变慢；升级或扩容 Redis 时留意 `ATI_REDIS_URL`。
-8. **低内存运维**：服务器仅 2 GB 内存。升级后检查 `docker stats` 确认各容器内存未持续触顶；若 Postgres 内存紧张，优先检查长事务和慢查询，不要盲目调大 `shared_buffers`。
+2. **证书续期验证**：DNS-01 基本签发检查已通过，但第一次自然续期后仍须确认 AliDNS TXT创建/删除、证书安装和 Nginx Reload完整链路。定期检查证书到期时间和 acme.sh Cron日志。
+3. **DNS API凭据**：AliDNS RAM凭据只允许 root读取，应保持最小权限并定期轮换；严禁写入项目目录、Git或日志。
+4. **旧代理回退**：Python代理仅作为应急回退，不应与 Nginx同时运行，否则会争抢 443。其日志轮转风险只在回退启用期间存在。
+5. **数据库迁移**：当前应用已使用 Alembic，`migrate` 服务必须以 `Exited (0)` 完成后 API 和 Worker 才能启动。升级前仍须备份并检查迁移脚本。
+6. **缓存依赖 Redis**：读路径列表/详情/统计依赖 Redis 缓存。Redis 故障时读路径自动降级直查数据库，功能可用但会变慢；升级或扩容 Redis 时留意 `ATI_REDIS_URL`。
+7. **低内存运维**：服务器仅 2 GB 内存。升级后检查 `docker stats` 确认各容器内存未持续触顶；若 Postgres 内存紧张，优先检查长事务和慢查询，不要盲目调大 `shared_buffers`。
 
 ## 12. 上线完成判定
 
@@ -432,9 +499,9 @@ df -h / /var/lib/docker
 - `docker compose ps -a` 中 API、Worker、Web、PostgreSQL、Redis、MinIO 均运行，`migrate` 为 `Exited (0)`；
 - PostgreSQL、Redis 为 `healthy`；
 - `curl http://127.0.0.1:8080/api/v1/health` 返回 `{"status":"ok"}`；
-- `ai-testing-intelligence-proxy.service` 为 `active`、`enabled`；
+- 宿主机 Nginx为 `active`、`enabled`，`ai-testing-intelligence-proxy.service` 为 `inactive`、`disabled`；
 - HTTPS 健康接口返回 `{"status":"ok"}`；
 - `work-tracker-proxy.service` 为 `inactive`、`disabled`；
 - 磁盘有足够可用空间；
-- Certbot 模拟续期通过，或已经部署其他可靠的证书自动续期方案；
+- acme.sh DNS-01 正式证书已安装，线上序列号与磁盘证书一致，root Cron存在；
 - Redis 缓存可达：`docker compose exec api python -c "from app.cache import get_json; import asyncio; print(asyncio.run(get_json('health:check')))"` 不报错即可（返回 `None` 正常，Redis 可达且降级未触发即算通过）。
