@@ -28,6 +28,7 @@ Nginx 是替换 Python 代理，而不是与它长期并行运行。迁移成功
 - 不安装推荐包和额外 Nginx 模块；
 - 不启用响应缓存、Lua、ModSecurity 等额外功能。
 - RHEL/Alibaba Cloud Linux 如果启用了 SELinux Enforcing，脚本只开启 Nginx 访问本机 HTTP 上游所需的 `httpd_can_network_connect` 布尔值，迁移失败时恢复原值。
+- DNF/YUM 如果通过 `exclude` 规则过滤了 Nginx，脚本只对安装 Nginx 的单次命令临时使用 `--disableexcludes=all`，不会修改系统的软件包管理器配置。
 
 低并发时，Nginx Master 加 1 个 Worker 通常只需要十几 MB 常驻内存。旧 Python 代理停止后，总常驻内存一般不会增加。最终应以服务器上的 `ps`、`free` 和 `docker stats` 实测为准。
 
@@ -90,7 +91,7 @@ ATI_SKIP_CERTBOT_RECONFIGURE=1 ./scripts/migrate-to-nginx.sh
 
 1. 校验项目目录、域名、证书、私钥、命令和本地健康接口。
 2. 记录 Nginx和旧 Python 代理迁移前的运行、启用状态。
-3. 自动识别 `apt-get`、`dnf` 或 `yum` 并安装 Nginx；Debian 系使用最小化安装参数。
+3. 自动识别 `apt-get`、`dnf` 或 `yum` 并安装 Nginx；Debian 系使用最小化安装参数，DNF/YUM 被排除规则拦截时仅对本次安装临时忽略排除规则。
 4. 将原 Nginx 主配置、站点配置和 Certbot 续期配置备份到 `backups/nginx-migration/<时间>/`。
 5. 自动识别 Debian 的 `sites-enabled` 或 RHEL/Alibaba Cloud Linux 的 `conf.d` 布局，并将 Nginx 收敛为 1 个 Worker 和 512 个连接。
 6. 写入 HTTP ACME Challenge、HTTPS证书和到 `127.0.0.1:8080` 的代理配置；SELinux Enforcing 环境按需允许该上游连接。

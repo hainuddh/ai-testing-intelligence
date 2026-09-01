@@ -150,7 +150,10 @@ install_nginx() {
                     sudo dnf makecache
                 fi
                 log "通过 DNF 安装 Nginx 包"
-                sudo dnf install -y nginx
+                if ! sudo dnf install -y nginx; then
+                    log "普通 DNF 安装失败，临时忽略软件包排除规则重试（不修改永久配置）"
+                    sudo dnf --disableexcludes=all install -y nginx
+                fi
                 ;;
             yum)
                 if [[ "${ATI_SKIP_PACKAGE_UPDATE:-0}" != "1" ]]; then
@@ -158,7 +161,10 @@ install_nginx() {
                     sudo yum makecache
                 fi
                 log "通过 YUM 安装 Nginx 包"
-                sudo yum install -y nginx
+                if ! sudo yum install -y nginx; then
+                    log "普通 YUM 安装失败，临时忽略软件包排除规则重试（不修改永久配置）"
+                    sudo yum --disableexcludes=all install -y nginx
+                fi
                 ;;
             *)
                 fail "无法识别可用的软件包管理器"
