@@ -3,7 +3,6 @@
 import ssl
 import asyncio
 import os
-import time
 import logging
 import socket
 
@@ -34,39 +33,29 @@ async def handle_client(reader: asyncio.StreamReader, writer: asyncio.StreamWrit
     """处理单个客户端连接"""
     addr = writer.get_extra_info("peername")
     log.info(f"[新连接] {addr}")
+    backend_writer = None
 
     try:
-        # 读取请求（带超时）
-        request = await asyncio.wait_for(reader.read(65536), timeout=10.0)
-        if not request:
-            log.info(f"[断开] {addr} - 无请求数据")
-            return
-
         # 连接后端
         backend_reader, backend_writer = await asyncio.wait_for(
             asyncio.open_connection(BACKEND_HOST, BACKEND_PORT), timeout=3.0
         )
 
-        # 转发请求
-        backend_writer.write(request)
-        await backend_writer.drain()
+        async def relay(source: asyncio.StreamReader, target: asyncio.StreamWriter):
+            while data := await source.read(65536):
+                target.write(data)
+                await target.drain()
 
-        # 接收响应并回传客户端
-        while True:
-            try:
-                response = await asyncio.wait_for(backend_reader.read(65536), timeout=30.0)
-                if not response:
-                    break
-                writer.write(response)
-                await writer.drain()
-            except asyncio.TimeoutError:
-                break
-
-        backend_writer.close()
-        try:
-            await backend_writer.wait_closed()
-        except Exception:
-            pass
+        # Keep both directions open so HTTP keep-alive requests are not delayed.
+        client_to_backend = asyncio.create_task(relay(reader, backend_writer))
+        backend_to_client = asyncio.create_task(relay(backend_reader, writer))
+        done, pending = await asyncio.wait(
+            {client_to_backend, backend_to_client},
+            return_when=asyncio.FIRST_COMPLETED,
+        )
+        for task in pending:
+            task.cancel()
+        await asyncio.gather(*done, *pending, return_exceptions=True)
 
         log.info(f"[完成] {addr}")
 
@@ -75,6 +64,12 @@ async def handle_client(reader: asyncio.StreamReader, writer: asyncio.StreamWrit
     except Exception as e:
         log.info(f"[错误] {addr}: {e}")
     finally:
+        if backend_writer is not None:
+            try:
+                backend_writer.close()
+                await backend_writer.wait_closed()
+            except Exception:
+                pass
         try:
             writer.close()
             await writer.wait_closed()

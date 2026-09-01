@@ -3,6 +3,8 @@ set -Eeuo pipefail
 
 PROJECT_DIR="${ATI_PROJECT_DIR:-/home/admin/ai-testing-intelligence}"
 PROXY_SERVICE="${ATI_PROXY_SERVICE:-ai-testing-intelligence-proxy.service}"
+NGINX_MARKER="${ATI_NGINX_MARKER:-/etc/ai-testing-intelligence/nginx-proxy.enabled}"
+NGINX_BIN="${ATI_NGINX_BIN:-/usr/sbin/nginx}"
 DOMAIN="${ATI_DOMAIN:-api.ddhlf.xyz}"
 LOCAL_HEALTH_URL="${ATI_LOCAL_HEALTH_URL:-http://127.0.0.1:8080/api/v1/health}"
 PUBLIC_HEALTH_URL="${ATI_PUBLIC_HEALTH_URL:-https://${DOMAIN}/api/v1/health}"
@@ -27,9 +29,9 @@ AI Testing Intelligence 运维脚本
   app-start             只启动 Compose 应用
   app-stop              只停止 Compose 应用（保留容器和数据卷）
   app-restart           只重启 Compose 应用
-  proxy-start           启动 HTTPS 代理
-  proxy-stop            停止 HTTPS 代理
-  proxy-restart         重启 HTTPS 代理
+  proxy-start           启动当前 HTTPS 入口（Nginx 或旧 Python 代理）
+  proxy-stop            停止当前 HTTPS 入口
+  proxy-restart         重启当前 HTTPS 入口
 
 状态与排障：
   status                查看 Compose、代理、端口、磁盘和健康状态
@@ -80,6 +82,10 @@ preflight() {
     require_command docker
     require_command curl
     require_command systemctl
+    if [[ -e "${NGINX_MARKER}" ]]; then
+        require_command sudo
+        sudo test -x "${NGINX_BIN}" || fail "缺少 Nginx：${NGINX_BIN}"
+    fi
     cd "${PROJECT_DIR}"
     "${COMPOSE[@]}" version >/dev/null
 }
@@ -142,21 +148,39 @@ app_restart() {
 
 proxy_start() {
     wait_local_health
-    log "启动 HTTPS 代理：${PROXY_SERVICE}"
-    systemctl --user start "${PROXY_SERVICE}"
-    systemctl --user is-active --quiet "${PROXY_SERVICE}" || fail "HTTPS 代理启动失败"
+    if [[ -e "${NGINX_MARKER}" ]]; then
+        log "启动 Nginx HTTPS 入口"
+        sudo systemctl start nginx
+        sudo systemctl is-active --quiet nginx || fail "Nginx 启动失败"
+    else
+        log "启动 HTTPS 代理：${PROXY_SERVICE}"
+        systemctl --user start "${PROXY_SERVICE}"
+        systemctl --user is-active --quiet "${PROXY_SERVICE}" || fail "HTTPS 代理启动失败"
+    fi
 }
 
 proxy_stop() {
-    log "停止 HTTPS 代理：${PROXY_SERVICE}"
-    systemctl --user stop "${PROXY_SERVICE}"
+    if [[ -e "${NGINX_MARKER}" ]]; then
+        log "停止 Nginx HTTPS 入口"
+        sudo systemctl stop nginx
+    else
+        log "停止 HTTPS 代理：${PROXY_SERVICE}"
+        systemctl --user stop "${PROXY_SERVICE}"
+    fi
 }
 
 proxy_restart() {
     wait_local_health
-    log "重启 HTTPS 代理：${PROXY_SERVICE}"
-    systemctl --user restart "${PROXY_SERVICE}"
-    systemctl --user is-active --quiet "${PROXY_SERVICE}" || fail "HTTPS 代理重启失败"
+    if [[ -e "${NGINX_MARKER}" ]]; then
+        log "校验并重载 Nginx HTTPS 入口"
+        sudo "${NGINX_BIN}" -t
+        sudo systemctl reload nginx
+        sudo systemctl is-active --quiet nginx || fail "Nginx 重载失败"
+    else
+        log "重启 HTTPS 代理：${PROXY_SERVICE}"
+        systemctl --user restart "${PROXY_SERVICE}"
+        systemctl --user is-active --quiet "${PROXY_SERVICE}" || fail "HTTPS 代理重启失败"
+    fi
     wait_public_health
 }
 
@@ -182,7 +206,11 @@ show_status() {
     printf '\n=== Docker Compose ===\n'
     "${COMPOSE[@]}" ps || true
     printf '\n=== HTTPS 代理 ===\n'
-    systemctl --user --no-pager --full status "${PROXY_SERVICE}" || true
+    if [[ -e "${NGINX_MARKER}" ]]; then
+        sudo systemctl --no-pager --full status nginx || true
+    else
+        systemctl --user --no-pager --full status "${PROXY_SERVICE}" || true
+    fi
     printf '\n=== 关键端口 ===\n'
     if command -v ss >/dev/null 2>&1; then
         ss -ltn '( sport = :443 or sport = :8080 )' || true
@@ -205,6 +233,9 @@ show_status() {
 show_logs() {
     local service="${1:-}"
     if [[ "${service}" == "proxy" ]]; then
+        if [[ -e "${NGINX_MARKER}" ]]; then
+            exec sudo tail -F /var/log/nginx/ai-testing-intelligence-error.log
+        fi
         exec journalctl --user -u "${PROXY_SERVICE}" -f
     elif [[ -n "${service}" ]]; then
         exec "${COMPOSE[@]}" logs -f "${service}"
@@ -216,7 +247,11 @@ show_logs() {
 show_logs_tail() {
     local service="${1:-}"
     if [[ "${service}" == "proxy" ]]; then
-        journalctl --user -u "${PROXY_SERVICE}" -n 200 --no-pager
+        if [[ -e "${NGINX_MARKER}" ]]; then
+            sudo tail -n 200 /var/log/nginx/ai-testing-intelligence-error.log
+        else
+            journalctl --user -u "${PROXY_SERVICE}" -n 200 --no-pager
+        fi
     elif [[ -n "${service}" ]]; then
         "${COMPOSE[@]}" logs --tail 200 "${service}"
     else
@@ -284,8 +319,12 @@ upgrade() {
 
 config_check() {
     "${COMPOSE[@]}" config --quiet
-    /usr/bin/python3.11 -m py_compile "${PROJECT_DIR}/deploy/https_proxy.py"
-    systemd-analyze --user verify "${HOME}/.config/systemd/user/${PROXY_SERVICE}"
+    if [[ -e "${NGINX_MARKER}" ]]; then
+        sudo "${NGINX_BIN}" -t
+    else
+        /usr/bin/python3.11 -m py_compile "${PROJECT_DIR}/deploy/https_proxy.py"
+        systemd-analyze --user verify "${HOME}/.config/systemd/user/${PROXY_SERVICE}"
+    fi
     log "配置检查通过"
 }
 

@@ -26,6 +26,8 @@ worktree remain the source of truth; verify them before starting work.
 
 ## Important Recent Work
 
+- Fixed the custom HTTPS proxy to relay both directions continuously, so browser keep-alive requests such as `/auth/me` are no longer held behind the previous response's 30-second read timeout.
+- Added `scripts/migrate-to-nginx.sh` for a guarded, low-memory Nginx migration with configuration backup, health verification, automatic rollback, legacy-proxy disablement, and optional Certbot webroot reconfiguration. `scripts/ops.sh` now manages Nginx after detecting the migrated site.
 - `e64c939`: improved user-creation conflict diagnostics and frontend error-detail display.
 - `c2a5fc8`: pinned Python/Node dependencies and added Docker pip/npm cache mounts and mirrors.
 - `34d56f1`: added async read paths, Redis caching, low-memory connection pools, and container limits.
@@ -42,6 +44,12 @@ worktree remain the source of truth; verify them before starting work.
   docker compose restart api worker
   ```
 
+- After deploying the HTTPS proxy keep-alive fix, restart the host proxy service:
+
+  ```bash
+  systemctl --user restart ai-testing-intelligence-proxy.service
+  ```
+
 - Redis and pip/npm registries are configurable through environment/build arguments documented in `docs/deployment-zh.md`.
 - Do not run `docker compose down -v` when data must be preserved.
 - HTTPS proxy, certificate renewal, disk pressure, and production-specific risks are tracked in `docs/go-live-operations-zh.md`.
@@ -52,6 +60,7 @@ worktree remain the source of truth; verify them before starting work.
 
 ## Known Follow-ups
 
+- Deploy the Nginx migration documented in `docs/nginx-migration-zh.md`, then verify login reaches `/api/v1/auth/me` without repeated 30-second delays. The Python proxy fix remains only as a rollback improvement.
 - Confirm the production user-creation conflict now displays the backend detail instead of only `请求失败 (409)`.
 - Resolve the documented Certbot renewal failure before certificate expiry.
 - Add centralized metrics/alerts for container memory, swap, disk, PostgreSQL latency, and Redis availability.

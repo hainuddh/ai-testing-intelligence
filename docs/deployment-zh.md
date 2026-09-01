@@ -358,6 +358,14 @@ curl --fail https://intelligence.example.com/api/v1/health
 
 Caddy 会自动申请和续期证书。若使用 Nginx 或云负载均衡器，也应把流量转发到 `127.0.0.1:8080`，并传递 `Host`、`X-Forwarded-For` 和 `X-Forwarded-Proto` 请求头。
 
+当前生产服务器如需从自定义 Python HTTPS 代理迁移到低内存 Nginx，请使用项目提供的一键迁移脚本：
+
+```bash
+bash scripts/migrate-to-nginx.sh
+```
+
+脚本会安装最小化 Nginx、备份原配置、限制为 1 个 Worker、切换 80/443、验证 HTTPS，并在成功后禁用旧代理；切换失败会自动恢复旧代理。完整前置条件、参数、资源配置、回滚和 Certbot 续期步骤参见 [Nginx HTTPS 代理迁移手册](nginx-migration-zh.md)。
+
 ## 10. 日常运维
 
 查看状态：

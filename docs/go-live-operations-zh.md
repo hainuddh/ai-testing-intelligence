@@ -417,7 +417,7 @@ df -h / /var/lib/docker
 
 1. **磁盘容量风险**：上线期间根分区曾达到约 `98%`，PostgreSQL 日志出现过 `No space left on device`。应立即清理无用日志、Docker 缓存和旧文件，并设置磁盘监控；清理前不要误删数据库卷。
 2. **证书续期风险**：Certbot `standalone` 模拟续期收到公网 HTTP `403`，必须修复并重新验证。
-3. **代理实现限制**：当前 Python 代理用于延续既有部署，长期建议迁移到 Caddy 或 Nginx，以获得更可靠的 TLS、证书续期、访问日志和反向代理能力。
+3. **代理实现限制**：当前 Python 代理已支持 HTTP keep-alive 连接的双向流式转发，避免登录后的权限请求被延迟；但它仍用于延续既有部署，长期建议迁移到 Caddy 或 Nginx，以获得更可靠的 TLS、证书续期、访问日志和反向代理能力。
 4. **代理权限**：systemd 用户服务通过 `sudo` 启动监听 443 的 Python 进程。后续建议使用 Caddy/Nginx，或为代理配置最小化端口绑定能力，减少 root 进程。
 5. **日志轮转**：`deploy/https_proxy.log` 当前未配置 logrotate，需防止日志长期增长占满磁盘。
 6. **数据库迁移**：当前应用已使用 Alembic，`migrate` 服务必须以 `Exited (0)` 完成后 API 和 Worker 才能启动。升级前仍须备份并检查迁移脚本。
