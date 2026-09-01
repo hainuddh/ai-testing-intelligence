@@ -29,6 +29,7 @@ Nginx 是替换 Python 代理，而不是与它长期并行运行。迁移成功
 - 不启用响应缓存、Lua、ModSecurity 等额外功能。
 - RHEL/Alibaba Cloud Linux 如果启用了 SELinux Enforcing，脚本只开启 Nginx 访问本机 HTTP 上游所需的 `httpd_can_network_connect` 布尔值，迁移失败时恢复原值。
 - DNF/YUM 如果通过 `exclude` 规则过滤了 Nginx，脚本只对安装 Nginx 的单次命令临时使用 `--disableexcludes=all`，不会修改系统的软件包管理器配置。
+- Certbot 新版本优先使用 `reconfigure`；旧版本即使 `help reconfigure` 返回错误的成功状态，也会在实际命令失败后自动切换到 `certonly --webroot` 兼容流程。
 
 低并发时，Nginx Master 加 1 个 Worker 通常只需要十几 MB 常驻内存。旧 Python 代理停止后，总常驻内存一般不会增加。最终应以服务器上的 `ps`、`free` 和 `docker stats` 实测为准。
 
@@ -98,7 +99,7 @@ ATI_SKIP_CERTBOT_RECONFIGURE=1 ./scripts/migrate-to-nginx.sh
 7. 运行 `nginx -t`，配置无效时不会切换流量。
 8. 停止旧 Python 代理，启动 Nginx，并用 `curl --resolve` 强制访问本机 443，避免 DNS、CDN 或 WAF 造成误判。
 9. HTTPS 检查通过后，禁用旧 Python 代理。
-10. 如果已安装 Certbot，将续期方式改为 Webroot，安装续期后的 Nginx Reload Hook，并执行模拟续期；失败时回滚，除非显式设置跳过变量。
+10. 如果已安装 Certbot，将续期方式改为 Webroot；新版本使用 `reconfigure`，不支持该命令的旧版本自动使用 `certonly` 兼容流程。随后安装续期后的 Nginx Reload Hook 并执行模拟续期；失败时回滚，除非显式设置跳过变量。
 11. 输出 Nginx 状态、监听端口和进程 RSS，便于核对内存。
 
 在步骤 8 健康检查通过前发生错误，脚本会恢复原 Nginx 配置，并按迁移前状态重新启用和启动 Python 代理。

@@ -430,6 +430,8 @@ switch_proxy() {
 }
 
 configure_certbot() {
+    local cert_domain cert_domains=() certbot_domain_args=()
+
     if [[ "${ATI_SKIP_CERTBOT_RECONFIGURE:-0}" == "1" ]]; then
         log "已按配置跳过 Certbot 迁移"
         return
@@ -439,13 +441,11 @@ configure_certbot() {
     fi
 
     log "将 Certbot 续期方式改为 Nginx webroot"
-    if sudo certbot help reconfigure >/dev/null 2>&1; then
-        sudo certbot reconfigure --cert-name "${DOMAIN}" --webroot \
-            --webroot-path "${ACME_ROOT}" --non-interactive \
-            || fail "Certbot webroot 重配置失败；如需暂时跳过，请设置 ATI_SKIP_CERTBOT_RECONFIGURE=1"
+    if sudo certbot reconfigure --cert-name "${DOMAIN}" --webroot \
+        --webroot-path "${ACME_ROOT}" --non-interactive; then
+        log "Certbot reconfigure 执行成功"
     else
-        log "当前 Certbot 不支持 reconfigure，使用 certonly 更新续期参数并验证 ACME"
-        local cert_domain cert_domains=() certbot_domain_args=()
+        log "Certbot reconfigure 不可用或执行失败，使用旧版 certonly 兼容流程"
         require_command openssl
         while IFS= read -r cert_domain; do
             [[ -n "${cert_domain}" ]] && cert_domains+=("${cert_domain}")

@@ -27,7 +27,7 @@ worktree remain the source of truth; verify them before starting work.
 ## Important Recent Work
 
 - Fixed the custom HTTPS proxy to relay both directions continuously, so browser keep-alive requests such as `/auth/me` are no longer held behind the previous response's 30-second read timeout.
-- Added `scripts/migrate-to-nginx.sh` for a guarded, low-memory Nginx migration with apt/dnf/yum and Nginx layout detection, a one-command DNF/YUM exclude bypass when required, configuration backup, health verification, automatic rollback, legacy-proxy disablement, and optional Certbot webroot reconfiguration. `scripts/ops.sh` now manages Nginx after detecting the migrated site.
+- Added `scripts/migrate-to-nginx.sh` for a guarded, low-memory Nginx migration with apt/dnf/yum and Nginx layout detection, a one-command DNF/YUM exclude bypass when required, configuration backup, health verification, automatic rollback, legacy-proxy disablement, and old/new Certbot webroot compatibility. `scripts/ops.sh` now manages Nginx after detecting the migrated site.
 - `e64c939`: improved user-creation conflict diagnostics and frontend error-detail display.
 - `c2a5fc8`: pinned Python/Node dependencies and added Docker pip/npm cache mounts and mirrors.
 - `34d56f1`: added async read paths, Redis caching, low-memory connection pools, and container limits.
