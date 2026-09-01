@@ -32,6 +32,7 @@ CERTBOT_HOOK_WAS_PRESENT=0
 MIGRATION_COMPLETE=0
 PACKAGE_MANAGER=""
 SELINUX_BOOLEAN_CHANGED=0
+SELINUX_ACME_CONTEXT_CHANGED=0
 
 log() {
     printf '[%(%F %T)T] %s\n' -1 "$*"
@@ -324,12 +325,15 @@ configure_selinux() {
     fi
     require_command getsebool
     require_command setsebool
-    if [[ "$(getsebool httpd_can_network_connect 2>/dev/null | awk '{print $3}')" == "on" ]]; then
-        return
+    require_command chcon
+    log "SELinux 为 Enforcing，允许 Nginx 读取 ACME challenge 文件"
+    sudo chcon -R -t httpd_sys_content_t "${ACME_ROOT}"
+    SELINUX_ACME_CONTEXT_CHANGED=1
+    if [[ "$(getsebool httpd_can_network_connect 2>/dev/null | awk '{print $3}')" != "on" ]]; then
+        log "SELinux 为 Enforcing，允许 Nginx 连接本机 Docker Web 上游"
+        sudo setsebool -P httpd_can_network_connect 1
+        SELINUX_BOOLEAN_CHANGED=1
     fi
-    log "SELinux 为 Enforcing，允许 Nginx 连接本机 Docker Web 上游"
-    sudo setsebool -P httpd_can_network_connect 1
-    SELINUX_BOOLEAN_CHANGED=1
 }
 
 wait_local_tls_health() {
@@ -343,6 +347,31 @@ wait_local_tls_health() {
         sleep "${HEALTH_INTERVAL}"
     done
     return 1
+}
+
+verify_acme_http_path() {
+    local challenge_name challenge_value challenge_file challenge_url local_value public_value
+    challenge_name="ati-migration-$PPID-$(date +%s)"
+    challenge_value="ati-acme-path-ok"
+    challenge_file="${ACME_ROOT}/.well-known/acme-challenge/${challenge_name}"
+    challenge_url="http://${DOMAIN}/.well-known/acme-challenge/${challenge_name}"
+    printf '%s' "${challenge_value}" | sudo tee "${challenge_file}" >/dev/null
+
+    local_value="$(curl --noproxy '*' --resolve "${DOMAIN}:80:127.0.0.1" \
+        --fail --silent --show-error --max-time 5 "${challenge_url}" || true)"
+    if [[ "${local_value}" != "${challenge_value}" ]]; then
+        sudo rm -f "${challenge_file}"
+        fail "本机 Nginx 无法读取 ACME challenge；请检查站点配置、文件权限和 SELinux"
+    fi
+    log "本机 ACME HTTP challenge 路径验证通过"
+
+    public_value="$(curl --noproxy '*' --fail --silent --show-error --max-time 10 \
+        "${challenge_url}" || true)"
+    sudo rm -f "${challenge_file}"
+    if [[ "${public_value}" != "${challenge_value}" ]]; then
+        fail "公网 ACME HTTP challenge 路径未返回预期内容；请检查 TCP 80、安全组、WAF/CDN 和域名转发"
+    fi
+    log "公网 ACME HTTP challenge 路径验证通过"
 }
 
 rollback() {
@@ -403,6 +432,9 @@ rollback() {
     if (( SELINUX_BOOLEAN_CHANGED )); then
         sudo setsebool -P httpd_can_network_connect 0 || true
     fi
+    if (( SELINUX_ACME_CONTEXT_CHANGED )) && command -v restorecon >/dev/null 2>&1; then
+        sudo restorecon -RF "${ACME_ROOT}" || true
+    fi
     if (( LEGACY_WAS_ACTIVE )) && ! systemctl --user is-active --quiet "${LEGACY_PROXY_SERVICE}"; then
         printf '警告：旧代理未能恢复，请立即检查服务和 443 端口。\n' >&2
     elif (( NGINX_WAS_ACTIVE )) && ! sudo systemctl is-active --quiet nginx; then
@@ -440,6 +472,7 @@ configure_certbot() {
         fail "未安装 Certbot，无法保证证书续期；如已另行管理证书，请设置 ATI_SKIP_CERTBOT_RECONFIGURE=1"
     fi
 
+    verify_acme_http_path
     log "将 Certbot 续期方式改为 Nginx webroot"
     if sudo certbot reconfigure --cert-name "${DOMAIN}" --webroot \
         --webroot-path "${ACME_ROOT}" --non-interactive; then

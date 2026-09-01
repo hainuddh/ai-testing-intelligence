@@ -27,7 +27,7 @@ Nginx 是替换 Python 代理，而不是与它长期并行运行。迁移成功
 - 登录接口按来源 IP 限制为每分钟 5 次，限流区与连接限制区合计 2 MB；
 - 不安装推荐包和额外 Nginx 模块；
 - 不启用响应缓存、Lua、ModSecurity 等额外功能。
-- RHEL/Alibaba Cloud Linux 如果启用了 SELinux Enforcing，脚本只开启 Nginx 访问本机 HTTP 上游所需的 `httpd_can_network_connect` 布尔值，迁移失败时恢复原值。
+- RHEL/Alibaba Cloud Linux 如果启用了 SELinux Enforcing，脚本为 ACME Webroot 设置只读 Web 内容上下文，并只开启 Nginx 访问本机 HTTP 上游所需的 `httpd_can_network_connect` 布尔值；迁移失败时恢复原值。
 - DNF/YUM 如果通过 `exclude` 规则过滤了 Nginx，脚本只对安装 Nginx 的单次命令临时使用 `--disableexcludes=all`，不会修改系统的软件包管理器配置。
 - Certbot 新版本优先使用 `reconfigure`；旧版本即使 `help reconfigure` 返回错误的成功状态，也会在实际命令失败后自动切换到 `certonly --webroot` 兼容流程。
 
@@ -95,12 +95,13 @@ ATI_SKIP_CERTBOT_RECONFIGURE=1 ./scripts/migrate-to-nginx.sh
 3. 自动识别 `apt-get`、`dnf` 或 `yum` 并安装 Nginx；Debian 系使用最小化安装参数，DNF/YUM 被排除规则拦截时仅对本次安装临时忽略排除规则。
 4. 将原 Nginx 主配置、站点配置和 Certbot 续期配置备份到 `backups/nginx-migration/<时间>/`。
 5. 自动识别 Debian 的 `sites-enabled` 或 RHEL/Alibaba Cloud Linux 的 `conf.d` 布局，并将 Nginx 收敛为 1 个 Worker 和 512 个连接。
-6. 写入 HTTP ACME Challenge、HTTPS证书和到 `127.0.0.1:8080` 的代理配置；SELinux Enforcing 环境按需允许该上游连接。
+6. 写入 HTTP ACME Challenge、HTTPS证书和到 `127.0.0.1:8080` 的代理配置；SELinux Enforcing 环境按需允许读取 Webroot 和访问该上游。
 7. 运行 `nginx -t`，配置无效时不会切换流量。
 8. 停止旧 Python 代理，启动 Nginx，并用 `curl --resolve` 强制访问本机 443，避免 DNS、CDN 或 WAF 造成误判。
 9. HTTPS 检查通过后，禁用旧 Python 代理。
-10. 如果已安装 Certbot，将续期方式改为 Webroot；新版本使用 `reconfigure`，不支持该命令的旧版本自动使用 `certonly` 兼容流程。随后安装续期后的 Nginx Reload Hook 并执行模拟续期；失败时回滚，除非显式设置跳过变量。
-11. 输出 Nginx 状态、监听端口和进程 RSS，便于核对内存。
+10. 在调用 Certbot 前，写入随机 Challenge 文件并分别验证本机强制解析和公网 DNS 的 HTTP 80 路径，提前区分 Nginx/SELinux 问题与云端安全组/WAF 问题。
+11. 如果已安装 Certbot，将续期方式改为 Webroot；新版本使用 `reconfigure`，不支持该命令的旧版本自动使用 `certonly` 兼容流程。随后安装续期后的 Nginx Reload Hook 并执行模拟续期；失败时回滚，除非显式设置跳过变量。
+12. 输出 Nginx 状态、监听端口和进程 RSS，便于核对内存。
 
 在步骤 8 健康检查通过前发生错误，脚本会恢复原 Nginx 配置，并按迁移前状态重新启用和启动 Python 代理。
 

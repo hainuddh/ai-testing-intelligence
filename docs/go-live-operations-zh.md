@@ -229,8 +229,9 @@ http://api.ddhlf.xyz/.well-known/acme-challenge/<token>
 1. 确认阿里云安全组允许公网 TCP `80`。
 2. 确认域名 `api.ddhlf.xyz` 的 A 记录指向 `39.102.75.100`。
 3. 检查是否有云 WAF、CDN、域名转发或其他边界规则返回 `403`。
-4. 修复后重新运行 `sudo certbot renew --dry-run`，必须看到模拟续期成功。
-5. 为 Certbot 增加成功续期后的代理重启 hook，或迁移到 Caddy/Nginx 统一管理 HTTPS。
+4. Alibaba Cloud Linux 启用 SELinux Enforcing 时，确认 `/var/www/certbot` 使用 `httpd_sys_content_t` 上下文；迁移脚本会自动设置并在请求 Certbot 前验证随机 Challenge 文件。
+5. 修复后重新运行 `sudo certbot renew --dry-run`，必须看到模拟续期成功。
+6. 为 Certbot 增加成功续期后的代理重启 hook，或迁移到 Caddy/Nginx 统一管理 HTTPS。
 
 在续期问题解决前，应定期执行 `sudo certbot certificates` 检查到期时间。
 
