@@ -171,6 +171,50 @@ describe('management radar workflow', () => {
     expect(await screen.findByText(source.name)).toBeInTheDocument()
   })
 
+  it('submits WeChat content without fetching the platform page', async () => {
+    localStorage.setItem('access_token', 'existing-token')
+    const user = userEvent.setup()
+    const wechatSource = { ...source, id: '12', name: '质量工程前沿', source_type: 'wechat' }
+    const fetchMock = vi.spyOn(globalThis, 'fetch')
+      .mockResolvedValueOnce(json({ id: 'user-2', username: 'maintainer', role: 'maintainer' }))
+      .mockResolvedValueOnce(json({ items: [], total: 0 }))
+      .mockResolvedValueOnce(json({ items: [wechatSource], total: 1 }))
+      .mockResolvedValueOnce(json({
+        id: 31, source_id: 12, source_name: wechatSource.name, title: '智能体测试方法',
+        url: 'https://mp.weixin.qq.com/s/example', summary: '智能体回归测试和安全评估实践。',
+        published_at: null, fetched_at: '2026-09-02T00:00:00Z', analysis_status: 'pending',
+        analysis_attempts: 0, testing_relevance_score: null, testing_value_score: null,
+        analysis_error: null, analyzed_at: null,
+      }, 201))
+
+    render(<App />)
+    await screen.findByRole('heading', { name: '内容情报' })
+    await user.click(screen.getByRole('button', { name: '信源管理' }))
+    expect(await screen.findByText('微信公众号')).toBeInTheDocument()
+    await user.click(screen.getByRole('button', { name: `录入内容 ${wechatSource.name}` }))
+    await user.type(screen.getByLabelText('内容标题'), '智能体测试方法')
+    await user.type(screen.getByLabelText('原文地址'), 'https://mp.weixin.qq.com/s/example')
+    await user.type(screen.getByLabelText('内容摘要'), '智能体回归测试和安全评估实践。')
+    await user.click(screen.getByRole('button', { name: '提交分析' }))
+
+    await waitFor(() => {
+      const call = fetchMock.mock.calls.at(-1)
+      expect(call?.[0]).toBe('/api/v1/collected-content')
+      expect(call?.[1]).toEqual(expect.objectContaining({
+        method: 'POST',
+        headers: { Authorization: 'Bearer existing-token', 'Content-Type': 'application/json' },
+      }))
+      expect(JSON.parse(String(call?.[1]?.body))).toEqual({
+        source_id: 12,
+        title: '智能体测试方法',
+        url: 'https://mp.weixin.qq.com/s/example',
+        summary: '智能体回归测试和安全评估实践。',
+        published_at: null,
+      })
+    })
+    expect((await screen.findAllByText('内容已进入分析队列')).length).toBeGreaterThan(0)
+  })
+
   it('shows admin-only user and database management', async () => {
     localStorage.setItem('access_token', 'admin-token')
     const user = userEvent.setup()

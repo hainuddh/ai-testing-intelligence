@@ -10,8 +10,8 @@ worktree remain the source of truth; verify them before starting work.
 - Working tree at handoff creation: clean
 - Deployment: Docker Compose
 - Production resource constraint: 2 GB RAM with swap enabled
-- Backend verification: 41 tests passed; Ruff passed
-- Frontend verification: 7 tests passed; TypeScript check passed
+- Backend verification: 44 tests passed; Ruff passed
+- Frontend verification: 8 tests passed; TypeScript check passed
 - Compose configuration: validated with non-secret placeholder environment variables
 
 ## Architecture Snapshot
@@ -26,6 +26,10 @@ worktree remain the source of truth; verify them before starting work.
 
 ## Important Recent Work
 
+- Added first-stage WeChat Official Account and Weibo ingestion: dedicated source categories,
+  authorized RSS/Atom endpoints, and maintainer/admin manual URL-title-summary submission that
+  never requests platform pages. Manual submissions reuse URL deduplication and the existing
+  pending analysis pipeline; platform sources reject Web endpoints.
 - Fixed the custom HTTPS proxy to relay both directions continuously, so browser keep-alive requests such as `/auth/me` are no longer held behind the previous response's 30-second read timeout.
 - Added `scripts/migrate-to-nginx.sh` for a guarded, low-memory Nginx migration with apt/dnf/yum and Nginx layout detection, DNF/YUM exclude fallback, SELinux-aware ACME Webroot access, local/public HTTP challenge preflight, automatic rollback, and old/new Certbot compatibility. `scripts/ops.sh` now manages Nginx after detecting the migrated site.
 - Production migrated to low-memory host Nginx. Because the unfiled mainland-hosted domain receives HTTP-01 `403`, certificate issuance moved to `acme.sh + AliDNS DNS-01`; basic issuance and deployment checks passed without storing credentials in the repository.
@@ -57,7 +61,7 @@ worktree remain the source of truth; verify them before starting work.
 
 ## Active Work
 
-- None at handoff creation.
+- None.
 
 ## Known Follow-ups
 
@@ -65,6 +69,9 @@ worktree remain the source of truth; verify them before starting work.
 - Confirm the production user-creation conflict now displays the backend detail instead of only `请求失败 (409)`.
 - Add centralized metrics/alerts for container memory, swap, disk, PostgreSQL latency, and Redis availability.
 - Periodically review pinned Python/Node versions and update lock metadata intentionally rather than during ordinary builds.
+- Evaluate the WeChat official publishing/third-party authorization APIs for owned or explicitly
+  authorized accounts, and Weibo commercial data APIs before implementing automated native
+  platform collection. Do not add cookie-based scraping or anti-bot bypasses.
 
 ## New Session Prompt
 

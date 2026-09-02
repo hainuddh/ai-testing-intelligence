@@ -103,6 +103,43 @@ def test_add_endpoint_to_source(client, db_session):
     assert deleted.status_code == 204
 
 
+def test_platform_sources_accept_rss_but_reject_web_endpoints(client, db_session):
+    headers = auth_headers(db_session)
+    for source_type in ("wechat", "weibo"):
+        source = client.post(
+            "/api/v1/sources",
+            headers=headers,
+            json={
+                "name": f"Platform {source_type}",
+                "source_type": source_type,
+                "languages": ["zh-CN"],
+            },
+        )
+        assert source.status_code == 201
+        source_id = source.json()["id"]
+        rss = client.post(
+            f"/api/v1/sources/{source_id}/endpoints",
+            headers=headers,
+            json={
+                "name": "Authorized feed",
+                "endpoint_type": "rss",
+                "url": f"https://example.com/{source_type}.xml",
+            },
+        )
+        web = client.post(
+            f"/api/v1/sources/{source_id}/endpoints",
+            headers=headers,
+            json={
+                "name": "Platform page",
+                "endpoint_type": "web",
+                "url": f"https://example.com/{source_type}",
+            },
+        )
+        assert rss.status_code == 201
+        assert web.status_code == 422
+        assert "only support RSS/Atom" in web.json()["detail"]
+
+
 def test_viewer_cannot_create_source(client, db_session):
     response = client.post(
         "/api/v1/sources",

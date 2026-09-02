@@ -75,6 +75,7 @@ type Endpoint = {
   health_status: string
 }
 type EndpointForm = Omit<Endpoint, 'id' | 'source_id' | 'enabled' | 'health_status'>
+type ManualContentForm = { title: string; url: string; summary: string; published_at?: string }
 type CollectedItem = {
   id: number
   source_id: number
@@ -95,7 +96,7 @@ type UserForm = { username: string; password?: string; role: Role; is_active: bo
 type DatabaseCounts = { dialect: string; users: number; sources: number; source_endpoints: number; content_items: number; fetch_runs: number }
 type Tab = 'content' | 'sources' | 'collection' | 'users' | 'database'
 
-const typeLabels: Record<string, string> = { website: '网站', newsletter: '通讯', rss: 'RSS', social: '社交媒体' }
+const typeLabels: Record<string, string> = { website: '网站', newsletter: '通讯', rss: 'RSS', social: '社交媒体', wechat: '微信公众号', weibo: '微博' }
 const trustLabels: Record<number, string> = { 5: '最高可信', 4: '高可信', 3: '待验证', 2: '观察中', 1: '低可信' }
 const roleLabels: Record<Role, string> = { viewer: '浏览者', maintainer: '维护者', admin: '管理员' }
 const analysisStatusLabels = { pending: '待分析', analyzed: '已入雷达', filtered: '已过滤', failed: '分析失败' }
@@ -145,13 +146,16 @@ export default function App() {
   const [sourceDrawer, setSourceDrawer] = useState(false)
   const [userDrawer, setUserDrawer] = useState(false)
   const [endpointDrawer, setEndpointDrawer] = useState(false)
+  const [manualContentDrawer, setManualContentDrawer] = useState(false)
   const [endpointSource, setEndpointSource] = useState<Source | null>(null)
+  const [manualContentSource, setManualContentSource] = useState<Source | null>(null)
   const [endpoints, setEndpoints] = useState<Endpoint[]>([])
   const [editingSource, setEditingSource] = useState<Source | null>(null)
   const [editingUser, setEditingUser] = useState<User | null>(null)
   const [sourceForm] = Form.useForm<SourceForm>()
   const [userForm] = Form.useForm<UserForm>()
   const [endpointForm] = Form.useForm<EndpointForm>()
+  const [manualContentForm] = Form.useForm<ManualContentForm>()
   const canManageSources = me?.role === 'maintainer' || me?.role === 'admin'
   const isAdmin = me?.role === 'admin'
 
@@ -450,6 +454,8 @@ export default function App() {
 
   const openEndpoints = async (source: Source) => {
     setEndpointSource(source)
+    endpointForm.resetFields()
+    endpointForm.setFieldsValue({ endpoint_type: 'rss', fetch_interval_minutes: 360, max_items_per_run: 50 })
     setEndpointDrawer(true)
     setLoading(true)
     setError('')
@@ -486,6 +492,36 @@ export default function App() {
       setEndpoints((current) => current.filter((item) => item.id !== endpoint.id))
     } catch (requestError) {
       setError(requestError instanceof Error ? requestError.message : '删除采集端点失败')
+    }
+  }
+
+  const openManualContent = (source: Source) => {
+    setManualContentSource(source)
+    manualContentForm.resetFields()
+    setManualContentDrawer(true)
+  }
+
+  const saveManualContent = async (values: ManualContentForm) => {
+    if (!manualContentSource) return
+    setSaving(true)
+    setError('')
+    try {
+      await request<CollectedItem>('/api/v1/collected-content', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          ...values,
+          source_id: Number(manualContentSource.id),
+          published_at: values.published_at ? dateBoundary(values.published_at) : null,
+        }),
+      })
+      contentCache.current.clear()
+      setManualContentDrawer(false)
+      Modal.success({ title: '内容已进入分析队列', content: '系统不会抓取平台页面，将使用你填写的标题和摘要进行测试情报分析。' })
+    } catch (requestError) {
+      setError(requestError instanceof Error ? requestError.message : '录入内容失败')
+    } finally {
+      setSaving(false)
     }
   }
 
@@ -556,7 +592,7 @@ export default function App() {
       <section className="dashboard-content">
         {error && <Alert className="dashboard-alert" type="error" message={error} showIcon closable onClose={() => setError('')} />}
         {tab === 'content' && <ContentView items={content} total={contentTotal} page={contentPage} loading={loading} query={query} startDate={startDate} endDate={endDate} minValueScore={minValueScore} selectedIds={selectedContentIds} exporting={exporting} onQuery={setQuery} onStartDate={setStartDate} onEndDate={setEndDate} onMinValueScore={setMinValueScore} onOpen={setSelectedContent} onToggleSelection={toggleContentSelection} onToggleCurrentPage={toggleCurrentPageSelection} onClearSelection={() => setSelectedContentIds([])} onExport={() => void exportSelectedContent()} onSearch={() => { setSelectedContentIds([]); setContentPage(1); void loadContent(1, query) }} onReset={() => { setSelectedContentIds([]); setQuery(''); setStartDate(''); setEndDate(''); setMinValueScore(60); setContentPage(1); void loadContent(1, '', '', '', 60) }} onPage={(page) => { setContentPage(page); void loadContent(page) }} />}
-        {tab === 'sources' && <SourcesView sources={sources} total={sourceTotal} loading={loading} canManage={canManageSources} canDelete={isAdmin} onAdd={() => openSource()} onEndpoints={(source) => void openEndpoints(source)} onEdit={openSource} onDelete={(source) => Modal.confirm({ title: `删除信源「${source.name}」？`, content: '删除后无法恢复，并会清除关联内容。', okText: '确认删除', cancelText: '取消', okButtonProps: { danger: true }, onOk: () => removeSource(source) })} />}
+        {tab === 'sources' && <SourcesView sources={sources} total={sourceTotal} loading={loading} canManage={canManageSources} canDelete={isAdmin} onAdd={() => openSource()} onManualContent={openManualContent} onEndpoints={(source) => void openEndpoints(source)} onEdit={openSource} onDelete={(source) => Modal.confirm({ title: `删除信源「${source.name}」？`, content: '删除后无法恢复，并会清除关联内容。', okText: '确认删除', cancelText: '取消', okButtonProps: { danger: true }, onOk: () => removeSource(source) })} />}
         {tab === 'collection' && isAdmin && <CollectedContentView items={collectedItems} total={collectedTotal} page={collectedPage} loading={loading} sources={sources} query={collectedQuery} status={collectedStatus} sourceId={collectedSource} startDate={collectedStartDate} endDate={collectedEndDate} selectedIds={selectedCollectedIds} onQuery={setCollectedQuery} onStatus={setCollectedStatus} onSource={setCollectedSource} onStartDate={setCollectedStartDate} onEndDate={setCollectedEndDate} onToggle={(id) => setSelectedCollectedIds((current) => { if (current.includes(id)) return current.filter((value) => value !== id); if (current.length >= 100) { setError('单次最多删除 100 条采集内容'); return current } return [...current, id] })} onTogglePage={() => { const pageIds = collectedItems.map((item) => item.id); const all = pageIds.every((id) => selectedCollectedIds.includes(id)); setSelectedCollectedIds((current) => { if (all) return current.filter((id) => !pageIds.includes(id)); const additions = pageIds.filter((id) => !current.includes(id)); const available = 100 - current.length; if (additions.length > available) setError('单次最多删除 100 条采集内容'); return [...current, ...additions.slice(0, available)] }) }} onApply={() => { const filters = { query: collectedQuery, status: collectedStatus, sourceId: collectedSource, startDate: collectedStartDate, endDate: collectedEndDate }; setAppliedCollectedFilters(filters); setSelectedCollectedIds([]); setCollectedPage(1); void loadCollectedContent(1, filters) }} onReset={() => { const filters = { query: '', status: '', sourceId: '', startDate: '', endDate: '' }; setCollectedQuery(''); setCollectedStatus(''); setCollectedSource(''); setCollectedStartDate(''); setCollectedEndDate(''); setAppliedCollectedFilters(filters); setSelectedCollectedIds([]); setCollectedPage(1); void loadCollectedContent(1, filters) }} onPage={(page) => { setCollectedPage(page); void loadCollectedContent(page, appliedCollectedFilters) }} onDelete={(ids) => Modal.confirm({ title: `删除 ${ids.length} 条采集内容？`, content: '删除后原始采集记录和分析结果均无法恢复。', okText: '确认删除', cancelText: '取消', okButtonProps: { danger: true }, onOk: () => deleteCollectedItems(ids) })} />}
         {tab === 'users' && isAdmin && <UsersView users={users} loading={loading} me={me} onAdd={() => openUser()} onEdit={openUser} onDelete={(user) => Modal.confirm({ title: `删除用户「${user.username}」？`, content: '该用户将立即失去访问权限。', okText: '确认删除', cancelText: '取消', okButtonProps: { danger: true }, onOk: () => removeUser(user) })} />}
         {tab === 'database' && isAdmin && <DatabaseView data={database} loading={loading} />}
@@ -564,6 +600,7 @@ export default function App() {
       <SourceDrawer open={sourceDrawer} editing={editingSource} form={sourceForm} saving={saving} onClose={() => setSourceDrawer(false)} onSave={saveSource} />
       <UserDrawer open={userDrawer} editing={editingUser} form={userForm} saving={saving} error={error} onClose={() => setUserDrawer(false)} onSave={saveUser} />
       <EndpointDrawer open={endpointDrawer} source={endpointSource} endpoints={endpoints} form={endpointForm} saving={saving} canManage={canManageSources} onClose={() => setEndpointDrawer(false)} onSave={saveEndpoint} onDelete={removeEndpoint} />
+      <ManualContentDrawer open={manualContentDrawer} source={manualContentSource} form={manualContentForm} saving={saving} onClose={() => setManualContentDrawer(false)} onSave={saveManualContent} />
       <IntelligenceModal item={selectedContent} onClose={() => setSelectedContent(null)} />
     </main>
   )
@@ -631,7 +668,7 @@ function IntelligenceModal({ item, onClose }: { item: ContentItem | null; onClos
   </Modal>
 }
 
-function SourcesView({ sources, total, loading, canManage, canDelete, onAdd, onEndpoints, onEdit, onDelete }: { sources: Source[]; total: number; loading: boolean; canManage: boolean; canDelete: boolean; onAdd: () => void; onEndpoints: (source: Source) => void; onEdit: (source: Source) => void; onDelete: (source: Source) => void }) {
+function SourcesView({ sources, total, loading, canManage, canDelete, onAdd, onManualContent, onEndpoints, onEdit, onDelete }: { sources: Source[]; total: number; loading: boolean; canManage: boolean; canDelete: boolean; onAdd: () => void; onManualContent: (source: Source) => void; onEndpoints: (source: Source) => void; onEdit: (source: Source) => void; onDelete: (source: Source) => void }) {
   return <>
     <PageIntro kicker="SOURCE NETWORK / ACTIVE" title="信源管理" copy="编排可信技术信号，构建你的持续监听网络。" action={canManage && <Button type="primary" size="large" icon={<PlusOutlined />} onClick={onAdd} aria-label="新增信源">新增信源</Button>} />
     <div className="metric-strip"><div><strong>{String(total).padStart(2, '0')}</strong><span>监听节点</span></div><div><strong>{sources.filter((item) => item.trust_level >= 4).length}</strong><span>高可信信号</span></div><div className="scan-line"><span>NETWORK COVERAGE</span><i /></div></div>
@@ -640,7 +677,7 @@ function SourcesView({ sources, total, loading, canManage, canDelete, onAdd, onE
       <div className="source-heading"><div className="source-icon"><GlobalOutlined /></div><div><span>{typeLabels[source.source_type] ?? source.source_type}</span><h2>{source.name}</h2></div></div>
       <p>{source.description || '暂无描述'}</p>{source.homepage_url && <a href={source.homepage_url} target="_blank" rel="noreferrer">{source.homepage_url}</a>}
       <div className="tag-row"><Tag color={source.trust_level >= 4 ? 'green' : 'default'}>{trustLabels[source.trust_level] ?? source.trust_level}</Tag>{source.languages.map((value) => <Tag key={value}>{value.toUpperCase()}</Tag>)}{source.topics.map((value) => <Tag key={value}>#{value}</Tag>)}</div>
-      <div className="card-actions"><Button type="text" icon={<RadarChartOutlined />} onClick={() => onEndpoints(source)}>采集端点</Button>{canManage && <Button type="text" icon={<EditOutlined />} onClick={() => onEdit(source)}>编辑</Button>}{canDelete && <Button type="text" danger icon={<DeleteOutlined />} onClick={() => onDelete(source)}>删除</Button>}</div>
+      <div className="card-actions">{canManage && ['wechat', 'weibo'].includes(source.source_type) && <Button type="text" icon={<PlusOutlined />} aria-label={`录入内容 ${source.name}`} onClick={() => onManualContent(source)}>录入内容</Button>}<Button type="text" icon={<RadarChartOutlined />} onClick={() => onEndpoints(source)}>采集端点</Button>{canManage && <Button type="text" icon={<EditOutlined />} onClick={() => onEdit(source)}>编辑</Button>}{canDelete && <Button type="text" danger icon={<DeleteOutlined />} onClick={() => onDelete(source)}>删除</Button>}</div>
     </article>)}</div>}
   </>
 }
@@ -721,16 +758,30 @@ function UserDrawer({ open, editing, form, saving, error, onClose, onSave }: { o
 }
 
 function EndpointDrawer({ open, source, endpoints, form, saving, canManage, onClose, onSave, onDelete }: { open: boolean; source: Source | null; endpoints: Endpoint[]; form: FormInstance<EndpointForm>; saving: boolean; canManage: boolean; onClose: () => void; onSave: (values: EndpointForm) => void; onDelete: (endpoint: Endpoint) => void }) {
+  const socialPlatform = source && ['wechat', 'weibo'].includes(source.source_type)
   return <Drawer title={<><span className="drawer-kicker">FETCH COORDINATES</span><strong>{source?.name ?? '采集端点'}</strong></>} size="large" open={open} onClose={onClose} destroyOnHidden>
-    <p className="drawer-copy">RSS/Atom 适合持续订阅；网页类型会把指定页面作为单条内容定期更新检查。</p>
+    <p className="drawer-copy">{socialPlatform ? '微信公众号和微博仅接入来源明确、已获授权的 RSS/Atom 地址；平台网页请通过人工录入提交，不会自动抓取。' : 'RSS/Atom 适合持续订阅；网页类型会把指定页面作为单条内容定期更新检查。'}</p>
     <div className="endpoint-list">{endpoints.length === 0 ? <span>尚未配置采集端点</span> : endpoints.map((endpoint) => <article key={endpoint.id}><div><strong>{endpoint.name}</strong><small>{endpoint.endpoint_type.toUpperCase()} · 每 {endpoint.fetch_interval_minutes} 分钟 · {endpoint.health_status}</small><a href={endpoint.url} target="_blank" rel="noreferrer">{endpoint.url}</a></div>{canManage && <Button type="text" danger icon={<DeleteOutlined />} aria-label={`删除端点 ${endpoint.name}`} onClick={() => Modal.confirm({ title: `删除端点「${endpoint.name}」？`, content: '删除后采集配置及其运行历史无法恢复。', okText: '确认删除', cancelText: '取消', okButtonProps: { danger: true }, onOk: () => onDelete(endpoint) })} />}</article>)}</div>
     {canManage && <Form form={form} layout="vertical" initialValues={{ endpoint_type: 'rss', fetch_interval_minutes: 360, max_items_per_run: 50 }} onFinish={onSave}>
       <Form.Item label="端点名称" name="name" rules={[{ required: true, message: '请输入端点名称' }]}><Input placeholder="官方 RSS" /></Form.Item>
-      <div className="form-pair"><Form.Item label="采集类型" name="endpoint_type" rules={[{ required: true }]}><Select options={[{ value: 'rss', label: 'RSS / Atom' }, { value: 'web', label: '网页' }]} /></Form.Item><Form.Item label="采集间隔（分钟）" name="fetch_interval_minutes" rules={[{ required: true }]}><Input type="number" min={15} max={10080} /></Form.Item></div>
+      <div className="form-pair"><Form.Item label="采集类型" name="endpoint_type" rules={[{ required: true }]}><Select options={socialPlatform ? [{ value: 'rss', label: 'RSS / Atom' }] : [{ value: 'rss', label: 'RSS / Atom' }, { value: 'web', label: '网页' }]} /></Form.Item><Form.Item label="采集间隔（分钟）" name="fetch_interval_minutes" rules={[{ required: true }]}><Input type="number" min={15} max={10080} /></Form.Item></div>
       <Form.Item label="采集地址" name="url" rules={[{ required: true, type: 'url', message: '请输入有效地址' }]}><Input placeholder="https://example.com/feed.xml" /></Form.Item>
       <Form.Item label="单次最大条数" name="max_items_per_run" rules={[{ required: true }]}><Input type="number" min={1} max={500} /></Form.Item>
       <Button htmlType="submit" type="primary" block loading={saving}>添加采集端点</Button>
     </Form>}
+  </Drawer>
+}
+
+function ManualContentDrawer({ open, source, form, saving, onClose, onSave }: { open: boolean; source: Source | null; form: FormInstance<ManualContentForm>; saving: boolean; onClose: () => void; onSave: (values: ManualContentForm) => void }) {
+  return <Drawer title={<><span className="drawer-kicker">MANUAL SIGNAL</span><strong>录入 {source?.name ?? '平台内容'}</strong></>} size="large" open={open} onClose={onClose} destroyOnHidden>
+    <p className="drawer-copy">仅保存原文链接和你填写的信息，不自动访问微信或微博页面。请确认内容来源合法，并保留原文证据链接。</p>
+    <Form form={form} layout="vertical" requiredMark={false} onFinish={onSave}>
+      <Form.Item label="内容标题" name="title" rules={[{ required: true, message: '请输入内容标题' }, { max: 500, message: '标题不能超过 500 个字符' }]}><Input /></Form.Item>
+      <Form.Item label="原文地址" name="url" rules={[{ required: true, type: 'url', message: '请输入有效地址' }]}><Input placeholder="https://" /></Form.Item>
+      <Form.Item label="内容摘要" name="summary" extra="摘要将用于测试相关性筛选和情报分析，请包含关键事实与测试价值线索。" rules={[{ required: true, message: '请输入内容摘要' }, { max: 20000, message: '摘要不能超过 20000 个字符' }]}><Input.TextArea rows={8} /></Form.Item>
+      <Form.Item label="发布日期（可选）" name="published_at"><Input type="date" /></Form.Item>
+      <Button htmlType="submit" type="primary" size="large" block loading={saving}>提交分析</Button>
+    </Form>
   </Drawer>
 }
 

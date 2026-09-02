@@ -1,18 +1,28 @@
+import hashlib
 from datetime import datetime
 from typing import Annotated, Literal
 
 from fastapi import APIRouter, HTTPException, Query, status
 from sqlalchemy import func, or_, select, text
+from sqlalchemy.exc import IntegrityError
 from sqlalchemy.orm import defer, selectinload
 
 from app.cache import cache_key, delete_prefix_sync, get_json, set_json
 from app.config import settings
-from app.dependencies import AdminUser, AdminUserAsync, AsyncDbSession, DbSession
-from app.models import ContentItem
+from app.dependencies import (
+    AdminUser,
+    AdminUserAsync,
+    AsyncDbSession,
+    DbSession,
+    MaintainerUser,
+)
+from app.models import ContentItem, Source
 from app.schemas import (
     CollectedContentListResponse,
+    CollectedContentResponse,
     ContentBulkDeleteRequest,
     ContentBulkDeleteResponse,
+    ManualContentCreate,
 )
 
 router = APIRouter(prefix="/collected-content", tags=["collected-content"])
@@ -23,6 +33,50 @@ def wait_for_content_workers(db: DbSession) -> None:
     if db.get_bind().dialect.name == "postgresql":
         db.execute(text("SELECT pg_advisory_xact_lock(82429101)"))
         db.execute(text("SELECT pg_advisory_xact_lock(82429102)"))
+
+
+@router.post("", response_model=CollectedContentResponse, status_code=status.HTTP_201_CREATED)
+def create_manual_content(
+    payload: ManualContentCreate, db: DbSession, _user: MaintainerUser
+) -> ContentItem:
+    wait_for_content_workers(db)
+    source = db.get(Source, payload.source_id)
+    if source is None:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Source not found")
+    if source.source_type not in {"wechat", "weibo"}:
+        raise HTTPException(
+            status_code=status.HTTP_422_UNPROCESSABLE_CONTENT,
+            detail="Manual submission is only supported for WeChat and Weibo sources",
+        )
+    url = str(payload.url)
+    url_hash = hashlib.sha256(url.encode()).hexdigest()
+    if db.scalar(select(ContentItem.id).where(ContentItem.url_hash == url_hash)) is not None:
+        raise HTTPException(
+            status_code=status.HTTP_409_CONFLICT,
+            detail="Content with this URL already exists",
+        )
+    item = ContentItem(
+        source_id=source.id,
+        title=payload.title,
+        url=url,
+        url_hash=url_hash,
+        summary=payload.summary,
+        body=payload.summary,
+        published_at=payload.published_at,
+    )
+    db.add(item)
+    try:
+        db.commit()
+    except IntegrityError as exc:
+        db.rollback()
+        raise HTTPException(
+            status_code=status.HTTP_409_CONFLICT,
+            detail="Content with this URL already exists",
+        ) from exc
+    db.refresh(item)
+    delete_prefix_sync("content:list")
+    delete_prefix_sync("collected:list")
+    return item
 
 
 @router.get("", response_model=CollectedContentListResponse)

@@ -173,6 +173,14 @@ class CollectedContentListResponse(BaseModel):
     total: int
 
 
+class ManualContentCreate(BaseModel):
+    source_id: int = Field(ge=1)
+    title: str = Field(min_length=1, max_length=500)
+    url: HttpUrl
+    summary: str = Field(min_length=1, max_length=20000)
+    published_at: datetime | None = None
+
+
 class ContentBulkDeleteRequest(BaseModel):
     content_ids: list[int] = Field(min_length=1, max_length=100)
 

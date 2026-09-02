@@ -55,6 +55,12 @@ docker compose exec api python -m app.bootstrap admin 'replace-this-password'
 Add RSS/Atom or Web collection endpoints from Source Management. The `worker` service
 collects due endpoints and makes discovered content available in the intelligence feed.
 
+WeChat Official Accounts and Weibo are available as dedicated source categories. For these
+platforms, configure only an authorized, traceable RSS/Atom feed, or use **Manual Content**
+to submit an original URL, title, and summary. Manual submission does not request the
+platform page; it stores the supplied evidence and sends it through the existing deduplication
+and testing-intelligence analysis pipeline. Maintainers and administrators can submit content.
+
 Add a small, idempotent set of real AI news feeds after creating the administrator:
 
 ```bash
