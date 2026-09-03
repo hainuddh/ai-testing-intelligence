@@ -76,6 +76,8 @@ type Endpoint = {
 }
 type EndpointForm = Omit<Endpoint, 'id' | 'source_id' | 'enabled' | 'health_status'>
 type ManualContentForm = { title: string; url: string; summary: string; published_at?: string }
+type SourceDiscovery = { homepage_url: string; feed_url: string; suggested_name: string; samples: { title: string; url: string; summary: string | null; published_at: string | null }[] }
+type SourceDiscoveryForm = { homepage_url: string; name: string; languages: string; trust_level: number; topics: string }
 type CollectedItem = {
   id: number
   source_id: number
@@ -148,6 +150,8 @@ export default function App() {
   const [userDrawer, setUserDrawer] = useState(false)
   const [endpointDrawer, setEndpointDrawer] = useState(false)
   const [manualContentDrawer, setManualContentDrawer] = useState(false)
+  const [discoveryDrawer, setDiscoveryDrawer] = useState(false)
+  const [discovery, setDiscovery] = useState<SourceDiscovery | null>(null)
   const [endpointSource, setEndpointSource] = useState<Source | null>(null)
   const [manualContentSource, setManualContentSource] = useState<Source | null>(null)
   const [endpoints, setEndpoints] = useState<Endpoint[]>([])
@@ -157,6 +161,7 @@ export default function App() {
   const [userForm] = Form.useForm<UserForm>()
   const [endpointForm] = Form.useForm<EndpointForm>()
   const [manualContentForm] = Form.useForm<ManualContentForm>()
+  const [discoveryForm] = Form.useForm<SourceDiscoveryForm>()
   const canManageSources = me?.role === 'maintainer' || me?.role === 'admin'
   const isAdmin = me?.role === 'admin'
 
@@ -423,6 +428,51 @@ export default function App() {
     setSourceDrawer(true)
   }
 
+  const openDiscovery = () => {
+    setDiscovery(null)
+    discoveryForm.resetFields()
+    discoveryForm.setFieldsValue({ languages: 'en', trust_level: 3, topics: '' })
+    setDiscoveryDrawer(true)
+  }
+
+  const discoverSource = async () => {
+    const homepage_url = discoveryForm.getFieldValue('homepage_url')
+    if (!homepage_url) return
+    setSaving(true)
+    setError('')
+    try {
+      const result = await request<SourceDiscovery>('/api/v1/sources/discover', {
+        method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ homepage_url }),
+      })
+      setDiscovery(result)
+      discoveryForm.setFieldValue('name', result.suggested_name)
+    } catch (requestError) {
+      setError(requestError instanceof Error ? requestError.message : '没有发现有效订阅源')
+    } finally {
+      setSaving(false)
+    }
+  }
+
+  const installDiscoveredSource = async (values: SourceDiscoveryForm) => {
+    if (!discovery) return
+    setSaving(true)
+    setError('')
+    try {
+      await request('/api/v1/sources/discover/install', {
+        method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({
+          homepage_url: discovery.homepage_url, feed_url: discovery.feed_url, name: values.name,
+          languages: splitValues(values.languages), trust_level: values.trust_level, topics: splitValues(values.topics),
+        }),
+      })
+      setDiscoveryDrawer(false)
+      await loadSources()
+    } catch (requestError) {
+      setError(requestError instanceof Error ? requestError.message : '启用发现信源失败')
+    } finally {
+      setSaving(false)
+    }
+  }
+
   const saveSource = async (values: SourceForm) => {
     setSaving(true)
     setError('')
@@ -593,7 +643,7 @@ export default function App() {
       <section className="dashboard-content">
         {error && <Alert className="dashboard-alert" type="error" message={error} showIcon closable onClose={() => setError('')} />}
         {tab === 'content' && <ContentView items={content} total={contentTotal} page={contentPage} loading={loading} query={query} startDate={startDate} endDate={endDate} minValueScore={minValueScore} selectedIds={selectedContentIds} exporting={exporting} onQuery={setQuery} onStartDate={setStartDate} onEndDate={setEndDate} onMinValueScore={setMinValueScore} onOpen={setSelectedContent} onToggleSelection={toggleContentSelection} onToggleCurrentPage={toggleCurrentPageSelection} onClearSelection={() => setSelectedContentIds([])} onExport={() => void exportSelectedContent()} onSearch={() => { setSelectedContentIds([]); setContentPage(1); void loadContent(1, query) }} onReset={() => { setSelectedContentIds([]); setQuery(''); setStartDate(''); setEndDate(''); setMinValueScore(60); setContentPage(1); void loadContent(1, '', '', '', 60) }} onPage={(page) => { setContentPage(page); void loadContent(page) }} />}
-        {tab === 'sources' && <SourcesView sources={sources} total={sourceTotal} loading={loading} canManage={canManageSources} canDelete={isAdmin} onAdd={() => openSource()} onManualContent={openManualContent} onEndpoints={(source) => void openEndpoints(source)} onEdit={openSource} onDelete={(source) => Modal.confirm({ title: `删除信源「${source.name}」？`, content: '删除后无法恢复，并会清除关联内容。', okText: '确认删除', cancelText: '取消', okButtonProps: { danger: true }, onOk: () => removeSource(source) })} />}
+        {tab === 'sources' && <SourcesView sources={sources} total={sourceTotal} loading={loading} canManage={canManageSources} canDelete={isAdmin} onAdd={() => openSource()} onDiscover={openDiscovery} onManualContent={openManualContent} onEndpoints={(source) => void openEndpoints(source)} onEdit={openSource} onDelete={(source) => Modal.confirm({ title: `删除信源「${source.name}」？`, content: '删除后无法恢复，并会清除关联内容。', okText: '确认删除', cancelText: '取消', okButtonProps: { danger: true }, onOk: () => removeSource(source) })} />}
         {tab === 'collection' && isAdmin && <CollectedContentView items={collectedItems} total={collectedTotal} page={collectedPage} loading={loading} sources={sources} query={collectedQuery} status={collectedStatus} sourceId={collectedSource} startDate={collectedStartDate} endDate={collectedEndDate} selectedIds={selectedCollectedIds} onQuery={setCollectedQuery} onStatus={setCollectedStatus} onSource={setCollectedSource} onStartDate={setCollectedStartDate} onEndDate={setCollectedEndDate} onToggle={(id) => setSelectedCollectedIds((current) => { if (current.includes(id)) return current.filter((value) => value !== id); if (current.length >= 100) { setError('单次最多删除 100 条采集内容'); return current } return [...current, id] })} onTogglePage={() => { const pageIds = collectedItems.map((item) => item.id); const all = pageIds.every((id) => selectedCollectedIds.includes(id)); setSelectedCollectedIds((current) => { if (all) return current.filter((id) => !pageIds.includes(id)); const additions = pageIds.filter((id) => !current.includes(id)); const available = 100 - current.length; if (additions.length > available) setError('单次最多删除 100 条采集内容'); return [...current, ...additions.slice(0, available)] }) }} onApply={() => { const filters = { query: collectedQuery, status: collectedStatus, sourceId: collectedSource, startDate: collectedStartDate, endDate: collectedEndDate }; setAppliedCollectedFilters(filters); setSelectedCollectedIds([]); setCollectedPage(1); void loadCollectedContent(1, filters) }} onReset={() => { const filters = { query: '', status: '', sourceId: '', startDate: '', endDate: '' }; setCollectedQuery(''); setCollectedStatus(''); setCollectedSource(''); setCollectedStartDate(''); setCollectedEndDate(''); setAppliedCollectedFilters(filters); setSelectedCollectedIds([]); setCollectedPage(1); void loadCollectedContent(1, filters) }} onPage={(page) => { setCollectedPage(page); void loadCollectedContent(page, appliedCollectedFilters) }} onDelete={(ids) => Modal.confirm({ title: `删除 ${ids.length} 条采集内容？`, content: '删除后原始采集记录和分析结果均无法恢复。', okText: '确认删除', cancelText: '取消', okButtonProps: { danger: true }, onOk: () => deleteCollectedItems(ids) })} />}
         {tab === 'users' && isAdmin && <UsersView users={users} loading={loading} me={me} onAdd={() => openUser()} onEdit={openUser} onDelete={(user) => Modal.confirm({ title: `删除用户「${user.username}」？`, content: '该用户将立即失去访问权限。', okText: '确认删除', cancelText: '取消', okButtonProps: { danger: true }, onOk: () => removeUser(user) })} />}
         {tab === 'database' && isAdmin && <DatabaseView data={database} loading={loading} />}
@@ -602,6 +652,7 @@ export default function App() {
       <UserDrawer open={userDrawer} editing={editingUser} form={userForm} saving={saving} error={error} onClose={() => setUserDrawer(false)} onSave={saveUser} />
       <EndpointDrawer open={endpointDrawer} source={endpointSource} endpoints={endpoints} form={endpointForm} saving={saving} canManage={canManageSources} onClose={() => setEndpointDrawer(false)} onSave={saveEndpoint} onDelete={removeEndpoint} />
       <ManualContentDrawer open={manualContentDrawer} source={manualContentSource} form={manualContentForm} saving={saving} onClose={() => setManualContentDrawer(false)} onSave={saveManualContent} />
+      <SourceDiscoveryDrawer open={discoveryDrawer} discovery={discovery} form={discoveryForm} saving={saving} onClose={() => setDiscoveryDrawer(false)} onDiscover={() => void discoverSource()} onInstall={installDiscoveredSource} />
       <IntelligenceModal item={selectedContent} onClose={() => setSelectedContent(null)} />
     </main>
   )
@@ -669,9 +720,9 @@ function IntelligenceModal({ item, onClose }: { item: ContentItem | null; onClos
   </Modal>
 }
 
-function SourcesView({ sources, total, loading, canManage, canDelete, onAdd, onManualContent, onEndpoints, onEdit, onDelete }: { sources: Source[]; total: number; loading: boolean; canManage: boolean; canDelete: boolean; onAdd: () => void; onManualContent: (source: Source) => void; onEndpoints: (source: Source) => void; onEdit: (source: Source) => void; onDelete: (source: Source) => void }) {
+function SourcesView({ sources, total, loading, canManage, canDelete, onAdd, onDiscover, onManualContent, onEndpoints, onEdit, onDelete }: { sources: Source[]; total: number; loading: boolean; canManage: boolean; canDelete: boolean; onAdd: () => void; onDiscover: () => void; onManualContent: (source: Source) => void; onEndpoints: (source: Source) => void; onEdit: (source: Source) => void; onDelete: (source: Source) => void }) {
   return <>
-    <PageIntro kicker="SOURCE NETWORK / ACTIVE" title="信源管理" copy="编排可信技术信号，构建你的持续监听网络。" action={canManage && <Button type="primary" size="large" icon={<PlusOutlined />} onClick={onAdd} aria-label="新增信源">新增信源</Button>} />
+    <PageIntro kicker="SOURCE NETWORK / ACTIVE" title="信源管理" copy="编排可信技术信号，构建你的持续监听网络。" action={canManage && <div className="source-intro-actions"><Button size="large" icon={<RadarChartOutlined />} onClick={onDiscover}>自动发现</Button><Button type="primary" size="large" icon={<PlusOutlined />} onClick={onAdd} aria-label="新增信源">新增信源</Button></div>} />
     <div className="metric-strip"><div><strong>{String(total).padStart(2, '0')}</strong><span>监听节点</span></div><div><strong>{sources.filter((item) => item.trust_level >= 4).length}</strong><span>高可信信号</span></div><div className="scan-line"><span>NETWORK COVERAGE</span><i /></div></div>
     {loading ? <Loading text="正在校准信源网络..." /> : sources.length === 0 ? <Empty icon={<RadarChartOutlined />} title="暂无信源监听点。" /> : <div className="source-grid">{sources.map((source, index) => <article className="source-card" key={source.id}>
       <div className="card-index">{String(index + 1).padStart(2, '0')}</div>
@@ -681,6 +732,23 @@ function SourcesView({ sources, total, loading, canManage, canDelete, onAdd, onM
       <div className="card-actions">{canManage && ['wechat', 'weibo'].includes(source.source_type) && <Button type="text" icon={<PlusOutlined />} aria-label={`录入内容 ${source.name}`} onClick={() => onManualContent(source)}>录入内容</Button>}<Button type="text" icon={<RadarChartOutlined />} onClick={() => onEndpoints(source)}>采集端点</Button>{canManage && <Button type="text" icon={<EditOutlined />} onClick={() => onEdit(source)}>编辑</Button>}{canDelete && <Button type="text" danger icon={<DeleteOutlined />} onClick={() => onDelete(source)}>删除</Button>}</div>
     </article>)}</div>}
   </>
+}
+
+function SourceDiscoveryDrawer({ open, discovery, form, saving, onClose, onDiscover, onInstall }: { open: boolean; discovery: SourceDiscovery | null; form: FormInstance<SourceDiscoveryForm>; saving: boolean; onClose: () => void; onDiscover: () => void; onInstall: (values: SourceDiscoveryForm) => void }) {
+  return <Drawer title={<><span className="drawer-kicker">SOURCE DISCOVERY</span><strong>自动发现信源</strong></>} size="large" open={open} onClose={onClose} destroyOnHidden>
+    <p className="drawer-copy">输入网站主页，平台会在站内发现并验证 RSS / Atom，展示样例后再创建监听。</p>
+    <Form form={form} layout="vertical" requiredMark={false} onFinish={onInstall}>
+      <Form.Item label="网站主页" name="homepage_url" rules={[{ required: true, type: 'url', message: '请输入有效主页地址' }]}><Input.Search placeholder="https://example.com/blog/" enterButton="开始探测" loading={saving && !discovery} onSearch={onDiscover} /></Form.Item>
+      {discovery && <>
+        <div className="discovery-result"><span>已验证订阅地址</span><a href={discovery.feed_url} target="_blank" rel="noreferrer">{discovery.feed_url}</a></div>
+        <div className="discovery-samples">{discovery.samples.map((item) => <article key={item.url}><strong>{item.title}</strong><small>{dateText(item.published_at)}</small><p>{item.summary || '该条目未提供摘要'}</p></article>)}</div>
+        <Form.Item label="信源名称" name="name" rules={[{ required: true, message: '请输入信源名称' }]}><Input /></Form.Item>
+        <div className="form-pair"><Form.Item label="语言" name="languages" rules={[{ required: true, message: '请输入语言' }]}><Input placeholder="zh-CN, en" /></Form.Item><Form.Item label="可信等级" name="trust_level" rules={[{ required: true }]}><Select options={Object.entries(trustLabels).map(([value, label]) => ({ value: Number(value), label }))} /></Form.Item></div>
+        <Form.Item label="关注主题" name="topics" extra="多个值用逗号分隔"><Input placeholder="AI Agent, testing" /></Form.Item>
+        <Button htmlType="submit" type="primary" size="large" block loading={saving}>确认并启用监听</Button>
+      </>}
+    </Form>
+  </Drawer>
 }
 
 function CollectedContentView({ items, total, page, loading, sources, query, status, sourceId, startDate, endDate, selectedIds, onQuery, onStatus, onSource, onStartDate, onEndDate, onToggle, onTogglePage, onApply, onReset, onPage, onDelete }: { items: CollectedItem[]; total: number; page: number; loading: boolean; sources: Source[]; query: string; status: string; sourceId: string; startDate: string; endDate: string; selectedIds: number[]; onQuery: (value: string) => void; onStatus: (value: string) => void; onSource: (value: string) => void; onStartDate: (value: string) => void; onEndDate: (value: string) => void; onToggle: (id: number) => void; onTogglePage: () => void; onApply: () => void; onReset: () => void; onPage: (page: number) => void; onDelete: (ids: number[]) => void }) {

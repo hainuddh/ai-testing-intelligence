@@ -1,3 +1,6 @@
+from urllib.parse import urlparse
+
+import httpx
 from fastapi import APIRouter, HTTPException, Query, status
 from sqlalchemy import func, select, text
 from sqlalchemy.exc import IntegrityError
@@ -11,11 +14,16 @@ from app.dependencies import (
     DbSession,
     MaintainerUser,
 )
+from app.fetcher import download_feed
 from app.models import Source, SourceEndpoint
 from app.schemas import (
     EndpointCreate,
     EndpointResponse,
     SourceCreate,
+    SourceDiscoveryInstall,
+    SourceDiscoveryInstallResponse,
+    SourceDiscoveryRequest,
+    SourceDiscoveryResponse,
     SourceListResponse,
     SourceResponse,
     SourceUpdate,
@@ -28,6 +36,78 @@ def wait_for_content_workers(db: DbSession) -> None:
     if db.get_bind().dialect.name == "postgresql":
         db.execute(text("SELECT pg_advisory_xact_lock(82429101)"))
         db.execute(text("SELECT pg_advisory_xact_lock(82429102)"))
+
+
+@router.post("/discover", response_model=SourceDiscoveryResponse)
+def discover_source(
+    payload: SourceDiscoveryRequest, _user: MaintainerUser
+) -> SourceDiscoveryResponse:
+    homepage_url = str(payload.homepage_url)
+    try:
+        feed_url, items = download_feed(homepage_url, 5, homepage_url)
+    except (httpx.HTTPError, ValueError) as exc:
+        raise HTTPException(
+            status_code=status.HTTP_422_UNPROCESSABLE_CONTENT,
+            detail="No valid RSS or Atom feed was found for this website",
+        ) from exc
+    hostname = urlparse(homepage_url).hostname or "Discovered source"
+    return SourceDiscoveryResponse(
+        homepage_url=homepage_url,
+        feed_url=feed_url,
+        suggested_name=hostname.removeprefix("www."),
+        samples=items,
+    )
+
+
+@router.post(
+    "/discover/install",
+    response_model=SourceDiscoveryInstallResponse,
+    status_code=status.HTTP_201_CREATED,
+)
+def install_discovered_source(
+    payload: SourceDiscoveryInstall, db: DbSession, user: MaintainerUser
+) -> SourceDiscoveryInstallResponse:
+    homepage_url = str(payload.homepage_url)
+    feed_url = str(payload.feed_url)
+    try:
+        verified_url, _items = download_feed(feed_url, 3, homepage_url)
+    except (httpx.HTTPError, ValueError) as exc:
+        raise HTTPException(
+            status_code=status.HTTP_422_UNPROCESSABLE_CONTENT,
+            detail="The discovered feed is no longer valid",
+        ) from exc
+    source = Source(
+        name=payload.name,
+        source_type="website",
+        homepage_url=homepage_url,
+        languages=payload.languages,
+        trust_level=payload.trust_level,
+        topics=payload.topics,
+        status="active",
+        created_by=user.id,
+    )
+    endpoint = SourceEndpoint(
+        source=source,
+        name="Auto-discovered RSS/Atom",
+        endpoint_type="rss",
+        url=verified_url,
+        fetch_interval_minutes=360,
+        max_items_per_run=50,
+        health_status="healthy",
+    )
+    db.add_all([source, endpoint])
+    try:
+        db.commit()
+    except IntegrityError as exc:
+        db.rollback()
+        raise HTTPException(
+            status_code=status.HTTP_409_CONFLICT, detail="Source name already exists"
+        ) from exc
+    db.refresh(source)
+    db.refresh(endpoint)
+    delete_prefix_sync("sources:list")
+    delete_prefix_sync("sources:endpoints")
+    return SourceDiscoveryInstallResponse(source=source, endpoint=endpoint)
 
 
 @router.post("", response_model=SourceResponse, status_code=status.HTTP_201_CREATED)

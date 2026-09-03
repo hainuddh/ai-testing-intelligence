@@ -93,6 +93,40 @@ class SourceListResponse(BaseModel):
     total: int
 
 
+class SourceDiscoveryRequest(BaseModel):
+    homepage_url: HttpUrl
+
+
+class SourceDiscoveryItem(BaseModel):
+    model_config = ConfigDict(from_attributes=True)
+
+    title: str
+    url: str
+    summary: str | None
+    published_at: datetime | None
+
+
+class SourceDiscoveryResponse(BaseModel):
+    homepage_url: str
+    feed_url: str
+    suggested_name: str
+    samples: list[SourceDiscoveryItem]
+
+
+class SourceDiscoveryInstall(BaseModel):
+    homepage_url: HttpUrl
+    feed_url: HttpUrl
+    name: str = Field(min_length=1, max_length=200)
+    languages: list[str] = Field(min_length=1)
+    trust_level: int = Field(default=3, ge=1, le=5)
+    topics: list[str] = Field(default_factory=list)
+
+
+class SourceDiscoveryInstallResponse(BaseModel):
+    source: SourceResponse
+    endpoint: "EndpointResponse"
+
+
 class EndpointCreate(BaseModel):
     name: str = Field(min_length=1, max_length=200)
     endpoint_type: Literal["rss", "web"]

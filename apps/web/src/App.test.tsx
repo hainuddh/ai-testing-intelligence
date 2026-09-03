@@ -171,6 +171,46 @@ describe('management radar workflow', () => {
     expect(await screen.findByText(source.name)).toBeInTheDocument()
   })
 
+  it('discovers previews and installs a source from its homepage', async () => {
+    localStorage.setItem('access_token', 'existing-token')
+    const user = userEvent.setup()
+    const discoveredSource = { ...source, id: 'source-2', name: 'example.com', homepage_url: 'https://example.com/blog/' }
+    const discovery = {
+      homepage_url: discoveredSource.homepage_url,
+      feed_url: 'https://example.com/blog/rss.xml',
+      suggested_name: 'example.com',
+      samples: [{ title: 'Agent testing update', url: 'https://example.com/article', summary: 'A verified feed sample', published_at: '2026-09-03T00:00:00Z' }],
+    }
+    const fetchMock = vi.spyOn(globalThis, 'fetch')
+      .mockResolvedValueOnce(json({ id: 'user-2', username: 'maintainer', role: 'maintainer' }))
+      .mockResolvedValueOnce(json({ items: [], total: 0 }))
+      .mockResolvedValueOnce(json({ items: [], total: 0 }))
+      .mockResolvedValueOnce(json(discovery))
+      .mockResolvedValueOnce(json({ source: discoveredSource, endpoint: { id: 9, source_id: 'source-2', name: 'Auto-discovered RSS/Atom', endpoint_type: 'rss', url: discovery.feed_url, fetch_interval_minutes: 360, max_items_per_run: 50, enabled: true, health_status: 'healthy' } }, 201))
+      .mockResolvedValueOnce(json({ items: [discoveredSource], total: 1 }))
+
+    render(<App />)
+    await screen.findByRole('heading', { name: '内容情报' })
+    await user.click(screen.getByRole('button', { name: '信源管理' }))
+    await screen.findByText('暂无信源监听点。')
+    await user.click(screen.getByRole('button', { name: 'radar-chart 自动发现' }))
+    await user.type(screen.getByLabelText('网站主页'), discoveredSource.homepage_url)
+    await user.click(screen.getByRole('button', { name: '开始探测' }))
+
+    expect(await screen.findByText('Agent testing update')).toBeInTheDocument()
+    expect(screen.getByText('A verified feed sample')).toBeInTheDocument()
+    await user.click(screen.getByRole('button', { name: '确认并启用监听' }))
+
+    await waitFor(() => expect(fetchMock).toHaveBeenCalledWith('/api/v1/sources/discover/install', expect.objectContaining({
+      method: 'POST',
+      body: JSON.stringify({
+        homepage_url: discovery.homepage_url, feed_url: discovery.feed_url, name: 'example.com',
+        languages: ['en'], trust_level: 3, topics: [],
+      }),
+    })))
+    expect(await screen.findByText('example.com')).toBeInTheDocument()
+  })
+
   it('submits WeChat content without fetching the platform page', async () => {
     localStorage.setItem('access_token', 'existing-token')
     const user = userEvent.setup()

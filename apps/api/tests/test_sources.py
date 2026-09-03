@@ -1,3 +1,6 @@
+from unittest.mock import patch
+
+from app.fetcher import FetchedItem
 from app.models import User
 from app.security import create_access_token, hash_password
 
@@ -101,6 +104,63 @@ def test_add_endpoint_to_source(client, db_session):
         f"/api/v1/sources/{source['id']}/endpoints/{endpoint['id']}", headers=headers
     )
     assert deleted.status_code == 204
+
+
+def test_maintainer_discovers_previews_and_installs_source(client, db_session):
+    headers = auth_headers(db_session)
+    discovered = FetchedItem(
+        title="Agent testing update",
+        url="https://example.com/article",
+        summary="Testing summary",
+    )
+    with patch(
+        "app.routers.sources.download_feed",
+        return_value=("https://example.com/feed.xml", [discovered]),
+    ) as download:
+        preview = client.post(
+            "/api/v1/sources/discover",
+            headers=headers,
+            json={"homepage_url": "https://www.example.com/news/"},
+        )
+        installed = client.post(
+            "/api/v1/sources/discover/install",
+            headers=headers,
+            json={
+                "homepage_url": "https://www.example.com/news/",
+                "feed_url": "https://example.com/feed.xml",
+                "name": "Example Engineering",
+                "languages": ["en"],
+                "trust_level": 4,
+                "topics": ["agent-testing"],
+            },
+        )
+
+    assert preview.status_code == 200
+    assert preview.json()["suggested_name"] == "example.com"
+    assert preview.json()["samples"][0]["title"] == "Agent testing update"
+    assert installed.status_code == 201
+    assert installed.json()["source"]["status"] == "active"
+    assert installed.json()["endpoint"]["url"] == "https://example.com/feed.xml"
+    assert download.call_count == 2
+
+
+def test_source_discovery_rejects_invalid_feed_and_viewers(client, db_session):
+    maintainer_headers = auth_headers(db_session)
+    with patch("app.routers.sources.download_feed", side_effect=ValueError("invalid")):
+        invalid = client.post(
+            "/api/v1/sources/discover",
+            headers=maintainer_headers,
+            json={"homepage_url": "https://example.com/"},
+        )
+    viewer_headers = auth_headers(db_session, role="viewer")
+    forbidden = client.post(
+        "/api/v1/sources/discover",
+        headers=viewer_headers,
+        json={"homepage_url": "https://example.com/"},
+    )
+
+    assert invalid.status_code == 422
+    assert forbidden.status_code == 403
 
 
 def test_platform_sources_accept_rss_but_reject_web_endpoints(client, db_session):

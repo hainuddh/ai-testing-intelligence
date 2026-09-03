@@ -11,9 +11,12 @@ from xml.etree import ElementTree
 import httpx
 from sqlalchemy.orm import Session
 
+from app.cache import delete_prefix_sync
 from app.config import settings
 from app.content_deduplication import content_url_hash, find_duplicate_content
 from app.models import ContentItem, FetchRun, SourceEndpoint
+
+SUMMARY_ENRICHMENT_LIMIT = 3
 
 
 @dataclass
@@ -31,22 +34,95 @@ class PageParser(HTMLParser):
         self.in_title = False
         self.title_parts: list[str] = []
         self.text_parts: list[str] = []
+        self.description: str | None = None
+        self.ignored_depth = 0
 
-    def handle_starttag(self, tag: str, _attrs: list[tuple[str, str | None]]) -> None:
-        if tag.lower() == "title":
+    def handle_starttag(self, tag: str, attrs: list[tuple[str, str | None]]) -> None:
+        tag = tag.lower()
+        if tag in {"script", "style", "noscript", "svg"}:
+            self.ignored_depth += 1
+        if tag == "title":
             self.in_title = True
+        if tag == "meta":
+            values = {name.lower(): value for name, value in attrs if value is not None}
+            field = (values.get("name") or values.get("property") or "").lower()
+            if field in {"description", "og:description", "twitter:description"}:
+                description = values.get("content", "").strip()
+                if description and self.description is None:
+                    self.description = description
 
     def handle_endtag(self, tag: str) -> None:
-        if tag.lower() == "title":
+        tag = tag.lower()
+        if tag == "title":
             self.in_title = False
+        if tag in {"script", "style", "noscript", "svg"} and self.ignored_depth:
+            self.ignored_depth -= 1
 
     def handle_data(self, data: str) -> None:
+        if self.ignored_depth:
+            return
         text = data.strip()
         if not text:
             return
         if self.in_title:
             self.title_parts.append(text)
         self.text_parts.append(text)
+
+
+class TextParser(HTMLParser):
+    def __init__(self) -> None:
+        super().__init__()
+        self.text_parts: list[str] = []
+
+    def handle_data(self, data: str) -> None:
+        text = data.strip()
+        if text:
+            self.text_parts.append(text)
+
+
+def plain_text(value: str | None) -> str | None:
+    if not value:
+        return None
+    parser = TextParser()
+    parser.feed(value)
+    return " ".join(parser.text_parts).strip() or None
+
+
+class FeedDiscoveryParser(HTMLParser):
+    def __init__(self, base_url: str) -> None:
+        super().__init__()
+        self.base_url = base_url
+        self.urls: list[str] = []
+
+    def handle_starttag(self, tag: str, attrs: list[tuple[str, str | None]]) -> None:
+        if tag.lower() != "link":
+            return
+        values = {name.lower(): value for name, value in attrs if value is not None}
+        relations = values.get("rel", "").lower().split()
+        content_type = values.get("type", "").lower().split(";", 1)[0]
+        href = values.get("href")
+        if "alternate" in relations and content_type in {
+            "application/rss+xml",
+            "application/atom+xml",
+        } and href:
+            self.urls.append(urljoin(self.base_url, href))
+
+
+def feed_candidates(data: bytes, page_url: str) -> list[str]:
+    parser = FeedDiscoveryParser(page_url)
+    parser.feed(data.decode("utf-8", errors="replace"))
+    parsed = urlparse(page_url)
+    origin = f"{parsed.scheme}://{parsed.netloc}"
+    path_base = page_url.split("?", 1)[0].rstrip("/") + "/"
+    candidates = [
+        *parser.urls,
+        urljoin(path_base, "rss/"),
+        urljoin(path_base, "feed/"),
+        f"{origin}/rss.xml",
+        f"{origin}/feed.xml",
+        f"{origin}/atom.xml",
+    ]
+    return list(dict.fromkeys(candidate for candidate in candidates if candidate != page_url))[:6]
 
 
 def validated_connection_url(url: str) -> tuple[str, str]:
@@ -121,11 +197,19 @@ def local_name(tag: str) -> str:
     return tag.rsplit("}", 1)[-1].lower()
 
 
+def namespace(tag: str) -> str | None:
+    return tag[1:].split("}", 1)[0] if tag.startswith("{") else None
+
+
 def child_text(element: ElementTree.Element, *names: str) -> str | None:
-    wanted = set(names)
-    for child in element:
-        if local_name(child.tag) in wanted and child.text:
-            return child.text.strip()
+    for name in names:
+        for child in element:
+            if (
+                local_name(child.tag) == name
+                and namespace(child.tag) != "http://search.yahoo.com/mrss/"
+                and child.text
+            ):
+                return child.text.strip()
     return None
 
 
@@ -160,7 +244,9 @@ def parse_feed(data: bytes, base_url: str, limit: int) -> list[FetchedItem]:
             FetchedItem(
                 title=title[:500],
                 url=urljoin(base_url, link),
-                summary=child_text(entry, "summary", "description", "content"),
+                summary=plain_text(
+                    child_text(entry, "summary", "description", "content", "encoded")
+                ),
                 published_at=parse_date(
                     child_text(entry, "published", "updated", "pubdate")
                 ),
@@ -169,12 +255,56 @@ def parse_feed(data: bytes, base_url: str, limit: int) -> list[FetchedItem]:
     return items
 
 
+def download_feed(
+    url: str, limit: int, discovery_url: str | None = None
+) -> tuple[str, list[FetchedItem]]:
+    discovery_pages: list[tuple[bytes, str]] = []
+    try:
+        final_url, data, _content_type = download(url)
+        try:
+            items = parse_feed(data, final_url, limit)
+        except ElementTree.ParseError:
+            items = []
+        if items:
+            return final_url, items
+        discovery_pages.append((data, final_url))
+    except (httpx.HTTPError, ValueError):
+        if not discovery_url or discovery_url == url:
+            raise
+
+    if discovery_url and all(page_url != discovery_url for _, page_url in discovery_pages):
+        try:
+            homepage_url, homepage_data, _content_type = download(discovery_url)
+            discovery_pages.append((homepage_data, homepage_url))
+        except (httpx.HTTPError, ValueError):
+            pass
+
+    candidates = list(
+        dict.fromkeys(
+            candidate
+            for page_data, page_url in discovery_pages
+            for candidate in feed_candidates(page_data, page_url)
+            if candidate not in {url, discovery_url}
+        )
+    )[:6]
+    for candidate in candidates:
+        try:
+            candidate_url, candidate_data, _content_type = download(candidate)
+            items = parse_feed(candidate_data, candidate_url, limit)
+        except (ElementTree.ParseError, httpx.HTTPError, ValueError):
+            continue
+        if items:
+            return candidate_url, items
+    raise ValueError("No valid RSS or Atom feed could be discovered")
+
+
 def parse_web(data: bytes, url: str) -> list[FetchedItem]:
     parser = PageParser()
     parser.feed(data.decode("utf-8", errors="replace"))
     title = " ".join(parser.title_parts).strip() or urlparse(url).hostname or "Untitled"
     body = " ".join(parser.text_parts)
-    return [FetchedItem(title=title[:500], url=url, summary=body[:1000] or None, body=body or None)]
+    summary = parser.description or body[:1000] or None
+    return [FetchedItem(title=title[:500], url=url, summary=summary, body=body or None)]
 
 
 def fetch_endpoint(db: Session, endpoint: SourceEndpoint) -> FetchRun:
@@ -183,18 +313,43 @@ def fetch_endpoint(db: Session, endpoint: SourceEndpoint) -> FetchRun:
     db.commit()
     db.refresh(run)
     try:
-        final_url, data, content_type = download(endpoint.url)
-        if endpoint.endpoint_type == "rss" or "xml" in content_type:
-            items = parse_feed(data, final_url, endpoint.max_items_per_run)
+        endpoint_changed = False
+        if endpoint.endpoint_type == "rss":
+            final_url, items = download_feed(
+                endpoint.url,
+                endpoint.max_items_per_run,
+                endpoint.source.homepage_url,
+            )
+            if final_url != endpoint.url:
+                endpoint.url = final_url
+                endpoint_changed = True
         elif endpoint.endpoint_type == "web":
+            final_url, data, _content_type = download(endpoint.url)
             items = parse_web(data, final_url)
         else:
             raise ValueError(f"Endpoint type {endpoint.endpoint_type!r} is not fetchable yet")
         created = 0
+        updated = False
+        enrichment_attempts = 0
         for item in items:
             url_hash = content_url_hash(item.url)
             duplicate_title = item.title if endpoint.endpoint_type == "rss" else None
             existing = find_duplicate_content(db, item.url, duplicate_title)
+            needs_summary = existing is None or (
+                existing.url_hash == url_hash and not existing.summary
+            )
+            if (
+                endpoint.endpoint_type == "rss"
+                and not item.summary
+                and needs_summary
+                and enrichment_attempts < SUMMARY_ENRICHMENT_LIMIT
+            ):
+                enrichment_attempts += 1
+                try:
+                    page_url, page_data, _content_type = download(item.url)
+                    item.summary = parse_web(page_data, page_url)[0].summary
+                except (httpx.HTTPError, ValueError):
+                    pass
             if existing is not None:
                 if endpoint.endpoint_type == "web" and existing.url_hash == url_hash:
                     existing.title = item.title
@@ -205,6 +360,15 @@ def fetch_endpoint(db: Session, endpoint: SourceEndpoint) -> FetchRun:
                     existing.analysis_attempts = 0
                     existing.analysis_error = None
                     existing.next_analysis_at = None
+                    updated = True
+                elif (
+                    existing.url_hash == url_hash
+                    and existing.source_id == endpoint.source_id
+                    and item.summary
+                    and existing.summary != item.summary
+                ):
+                    existing.summary = item.summary
+                    updated = True
                 continue
             db.add(
                 ContentItem(
@@ -223,6 +387,11 @@ def fetch_endpoint(db: Session, endpoint: SourceEndpoint) -> FetchRun:
         run.items_created = created
         run.completed_at = datetime.now(UTC)
         db.commit()
+        if updated:
+            delete_prefix_sync("content:list")
+            delete_prefix_sync("collected:list")
+        if endpoint_changed:
+            delete_prefix_sync("sources:endpoints")
     except Exception as exc:
         db.rollback()
         run = db.get(FetchRun, run.id)
