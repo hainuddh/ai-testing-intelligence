@@ -10,8 +10,8 @@ worktree remain the source of truth; verify them before starting work.
 - Working tree at handoff creation: clean
 - Deployment: Docker Compose
 - Production resource constraint: 2 GB RAM with swap enabled
-- Backend verification: 44 tests passed; Ruff passed
-- Frontend verification: 8 tests passed; TypeScript check passed
+- Backend verification: 52 tests passed; Ruff passed
+- Frontend verification: 9 tests passed; TypeScript check passed
 - Compose configuration: validated with non-secret placeholder environment variables
 
 ## Architecture Snapshot
@@ -26,6 +26,16 @@ worktree remain the source of truth; verify them before starting work.
 
 ## Important Recent Work
 
+- Added source discovery: the Sources page now has an "自动发现" button; maintainers can enter a website homepage, preview the discovered RSS/Atom feed with article samples, and confirm to atomically create an active source and healthy endpoint. Backend re-validates the feed at install time.
+- Added bounded RSS/Atom self-healing: invalid or HTML endpoint responses use feed autodiscovery
+  and a small same-site candidate set, broken feed URLs can recover through the configured source
+  homepage, and only candidates with valid entries replace the endpoint URL. Namespace-aware
+  summary extraction, same-URL refresh, and capped article metadata enrichment repair missing or
+  low-quality feed summaries without unbounded crawling.
+- Fixed duplicate syndicated content with different URLs bypassing URL-hash deduplication. RSS
+  collection and manual platform intake now also compare normalized titles, backed by a
+  functional PostgreSQL/SQLite index; Web endpoints remain URL-based so recurring page titles
+  do not suppress distinct monitored pages.
 - Added first-stage WeChat Official Account and Weibo ingestion: dedicated source categories,
   authorized RSS/Atom endpoints, and maintainer/admin manual URL-title-summary submission that
   never requests platform pages. Manual submissions reuse URL deduplication and the existing
@@ -58,6 +68,9 @@ worktree remain the source of truth; verify them before starting work.
 - Redis and pip/npm registries are configurable through environment/build arguments documented in `docs/deployment-zh.md`.
 - Do not run `docker compose down -v` when data must be preserved.
 - HTTPS proxy, certificate renewal, disk pressure, and production-specific risks are tracked in `docs/go-live-operations-zh.md`.
+- Potential inventions follow `docs/invention-governance-zh.md`. Candidate details and unpublished
+  evidence are maintained in the Git-ignored `.invention-record.md`; review it for non-trivial
+  technical designs and before public disclosure.
 
 ## Active Work
 
