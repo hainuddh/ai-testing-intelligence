@@ -1,4 +1,3 @@
-import hashlib
 import ipaddress
 import socket
 import time
@@ -10,10 +9,10 @@ from urllib.parse import urljoin, urlparse
 from xml.etree import ElementTree
 
 import httpx
-from sqlalchemy import select
 from sqlalchemy.orm import Session
 
 from app.config import settings
+from app.content_deduplication import content_url_hash, find_duplicate_content
 from app.models import ContentItem, FetchRun, SourceEndpoint
 
 
@@ -193,10 +192,11 @@ def fetch_endpoint(db: Session, endpoint: SourceEndpoint) -> FetchRun:
             raise ValueError(f"Endpoint type {endpoint.endpoint_type!r} is not fetchable yet")
         created = 0
         for item in items:
-            url_hash = hashlib.sha256(item.url.encode()).hexdigest()
-            existing = db.scalar(select(ContentItem).where(ContentItem.url_hash == url_hash))
+            url_hash = content_url_hash(item.url)
+            duplicate_title = item.title if endpoint.endpoint_type == "rss" else None
+            existing = find_duplicate_content(db, item.url, duplicate_title)
             if existing is not None:
-                if endpoint.endpoint_type == "web":
+                if endpoint.endpoint_type == "web" and existing.url_hash == url_hash:
                     existing.title = item.title
                     existing.summary = item.summary
                     existing.body = item.body

@@ -85,6 +85,51 @@ def test_fetch_endpoint_persists_items_and_deduplicates(db_session):
     assert db_session.query(FetchRun).count() == 2
 
 
+def test_fetch_endpoint_deduplicates_same_title_from_different_urls(db_session):
+    endpoint = add_endpoint(db_session)
+    first_feed = b"""<rss><channel><item><title>Shared article</title>
+    <link>https://publisher.example/original</link></item></channel></rss>"""
+    syndicated_feed = b"""<rss><channel><item><title> shared ARTICLE </title>
+    <link>https://syndicator.example/repost</link></item></channel></rss>"""
+
+    with patch(
+        "app.fetcher.download",
+        return_value=(endpoint.url, first_feed, "application/rss+xml"),
+    ):
+        first = fetch_endpoint(db_session, endpoint)
+    with patch(
+        "app.fetcher.download",
+        return_value=(endpoint.url, syndicated_feed, "application/rss+xml"),
+    ):
+        second = fetch_endpoint(db_session, endpoint)
+
+    assert first.items_created == 1
+    assert second.items_created == 0
+    assert db_session.query(ContentItem).count() == 1
+    assert db_session.query(ContentItem).one().url == "https://publisher.example/original"
+
+
+def test_web_endpoints_with_same_title_and_different_urls_are_distinct(db_session):
+    endpoint = add_endpoint(db_session)
+    endpoint.endpoint_type = "web"
+    db_session.commit()
+    page = b"<html><title>Shared site title</title><p>Useful body</p></html>"
+
+    with patch(
+        "app.fetcher.download",
+        side_effect=[
+            ("https://example.com/first", page, "text/html"),
+            ("https://example.com/second", page, "text/html"),
+        ],
+    ):
+        first = fetch_endpoint(db_session, endpoint)
+        second = fetch_endpoint(db_session, endpoint)
+
+    assert first.items_created == 1
+    assert second.items_created == 1
+    assert db_session.query(ContentItem).count() == 2
+
+
 def test_download_rejects_private_url_before_request():
     with patch("app.fetcher.validated_connection_url", side_effect=ValueError("blocked")):
         with pytest.raises(ValueError, match="blocked"):

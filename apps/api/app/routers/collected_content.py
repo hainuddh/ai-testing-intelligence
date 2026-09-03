@@ -1,4 +1,3 @@
-import hashlib
 from datetime import datetime
 from typing import Annotated, Literal
 
@@ -9,6 +8,7 @@ from sqlalchemy.orm import defer, selectinload
 
 from app.cache import cache_key, delete_prefix_sync, get_json, set_json
 from app.config import settings
+from app.content_deduplication import content_url_hash, find_duplicate_content
 from app.dependencies import (
     AdminUser,
     AdminUserAsync,
@@ -49,11 +49,11 @@ def create_manual_content(
             detail="Manual submission is only supported for WeChat and Weibo sources",
         )
     url = str(payload.url)
-    url_hash = hashlib.sha256(url.encode()).hexdigest()
-    if db.scalar(select(ContentItem.id).where(ContentItem.url_hash == url_hash)) is not None:
+    url_hash = content_url_hash(url)
+    if find_duplicate_content(db, url, payload.title) is not None:
         raise HTTPException(
             status_code=status.HTTP_409_CONFLICT,
-            detail="Content with this URL already exists",
+            detail="Content with this URL or title already exists",
         )
     item = ContentItem(
         source_id=source.id,
@@ -71,7 +71,7 @@ def create_manual_content(
         db.rollback()
         raise HTTPException(
             status_code=status.HTTP_409_CONFLICT,
-            detail="Content with this URL already exists",
+            detail="Content with this URL or title already exists",
         ) from exc
     db.refresh(item)
     delete_prefix_sync("content:list")

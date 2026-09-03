@@ -103,6 +103,7 @@ const analysisStatusLabels = { pending: '待分析', analyzed: '已入雷达', f
 const splitValues = (value: string) => value.split(/[,，]/).map((item) => item.trim()).filter(Boolean)
 const list = <T,>(data: T[] | { items: T[] }) => Array.isArray(data) ? data : data.items
 const dateText = (value: string | null) => value ? new Intl.DateTimeFormat('zh-CN', { dateStyle: 'medium' }).format(new Date(value)) : '时间未知'
+const dateTimeText = (value: string | null) => value ? new Intl.DateTimeFormat('zh-CN', { dateStyle: 'medium', timeStyle: 'medium' }).format(new Date(value)) : '时间未知'
 const dateBoundary = (value: string, endOfDay = false) => {
   const [year, month, day] = value.split('-').map(Number)
   return new Date(year, month - 1, day, endOfDay ? 23 : 0, endOfDay ? 59 : 0, endOfDay ? 59 : 0, endOfDay ? 999 : 0).toISOString()
@@ -685,6 +686,7 @@ function SourcesView({ sources, total, loading, canManage, canDelete, onAdd, onM
 function CollectedContentView({ items, total, page, loading, sources, query, status, sourceId, startDate, endDate, selectedIds, onQuery, onStatus, onSource, onStartDate, onEndDate, onToggle, onTogglePage, onApply, onReset, onPage, onDelete }: { items: CollectedItem[]; total: number; page: number; loading: boolean; sources: Source[]; query: string; status: string; sourceId: string; startDate: string; endDate: string; selectedIds: number[]; onQuery: (value: string) => void; onStatus: (value: string) => void; onSource: (value: string) => void; onStartDate: (value: string) => void; onEndDate: (value: string) => void; onToggle: (id: number) => void; onTogglePage: () => void; onApply: () => void; onReset: () => void; onPage: (page: number) => void; onDelete: (ids: number[]) => void }) {
   const pageSelected = items.length > 0 && items.every((item) => selectedIds.includes(item.id))
   const hasFilters = query || status || sourceId || startDate || endDate
+  const [selectedItem, setSelectedItem] = useState<CollectedItem | null>(null)
   return <>
     <PageIntro kicker="COLLECTION ARCHIVE / ADMIN" title="采集管理" copy="管理自动采集的全部原始信息，包括待分析、已入雷达、已过滤和失败内容。" />
     <div className="collection-tools">
@@ -700,7 +702,7 @@ function CollectedContentView({ items, total, page, loading, sources, query, sta
       <div className="collection-row collection-head" role="row"><span>选择</span><span>内容</span><span>状态</span><span>评分</span><span>采集时间</span><span>操作</span></div>
       {items.map((item) => <div className="collection-row" role="row" key={item.id}>
         <Checkbox checked={selectedIds.includes(item.id)} onChange={() => onToggle(item.id)} aria-label={`选择采集内容 ${item.title}`} />
-        <div className="collection-title"><strong>{item.title}</strong><small>{item.source_name}</small>{item.analysis_error && <em title={item.analysis_error}>{item.analysis_error}</em>}</div>
+        <div className="collection-title"><button type="button" onClick={() => setSelectedItem(item)}>{item.title}</button><small>{item.source_name}</small>{item.analysis_error && <em title={item.analysis_error}>{item.analysis_error}</em>}</div>
         <Tag className="collection-status" color={item.analysis_status === 'analyzed' ? 'green' : item.analysis_status === 'failed' ? 'red' : item.analysis_status === 'filtered' ? 'default' : 'blue'}>{analysisStatusLabels[item.analysis_status]}</Tag>
         <span className="collection-score" data-label="相关/价值">{item.testing_relevance_score ?? '-'} / {item.testing_value_score ?? '-'}</span>
         <time className="collection-time" data-label="采集时间">{dateText(item.fetched_at)}</time>
@@ -708,7 +710,21 @@ function CollectedContentView({ items, total, page, loading, sources, query, sta
       </div>)}
     </div>}
     {total > 20 && <Pagination className="radar-pagination" current={page} total={total} pageSize={20} showSizeChanger={false} onChange={onPage} />}
+    <CollectedContentModal item={selectedItem} onClose={() => setSelectedItem(null)} />
   </>
+}
+
+function CollectedContentModal({ item, onClose }: { item: CollectedItem | null; onClose: () => void }) {
+  if (!item) return null
+  return <Modal className="intel-modal collected-modal" width={760} open title={null} footer={null} onCancel={onClose}>
+    <div className="intel-kicker">COLLECTED CONTENT / #{item.id}</div>
+    <h2>{item.title}</h2>
+    <div className="intel-meta"><span>{item.source_name}</span><Tag color={item.analysis_status === 'analyzed' ? 'green' : item.analysis_status === 'failed' ? 'red' : item.analysis_status === 'filtered' ? 'default' : 'blue'}>{analysisStatusLabels[item.analysis_status]}</Tag><span>相关性 {item.testing_relevance_score ?? '-'}</span><span>价值 {item.testing_value_score ?? '-'}</span></div>
+    <section className="intel-section"><h3>原始摘要</h3><p>{item.summary || '暂无摘要'}</p></section>
+    <div className="collected-detail-grid"><div><span>发布时间</span><strong>{dateTimeText(item.published_at)}</strong></div><div><span>采集时间</span><strong>{dateTimeText(item.fetched_at)}</strong></div><div><span>分析时间</span><strong>{dateTimeText(item.analyzed_at)}</strong></div><div><span>分析次数</span><strong>{item.analysis_attempts}</strong></div></div>
+    {item.analysis_error && <section className="intel-section collected-error"><h3>失败原因</h3><p>{item.analysis_error}</p></section>}
+    <a className="original-link" href={item.url} target="_blank" rel="noreferrer">查看原文（外部链接） <ArrowRightOutlined /></a>
+  </Modal>
 }
 
 function UsersView({ users, loading, me, onAdd, onEdit, onDelete }: { users: User[]; loading: boolean; me: User; onAdd: () => void; onEdit: (user: User) => void; onDelete: (user: User) => void }) {

@@ -155,8 +155,14 @@ def test_manual_content_rejects_duplicates_missing_sources_and_viewers(client, d
 
     created = client.post("/api/v1/collected-content", headers=headers, json=payload)
     duplicate = client.post("/api/v1/collected-content", headers=headers, json=payload)
+    duplicate_title = client.post(
+        "/api/v1/collected-content",
+        headers=headers,
+        json={**payload, "url": "https://weibo.com/654321/repost"},
+    )
     assert created.status_code == 201
     assert duplicate.status_code == 409
+    assert duplicate_title.status_code == 409
     assert (
         client.post(
             "/api/v1/collected-content",
