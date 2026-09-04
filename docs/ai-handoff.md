@@ -6,11 +6,11 @@ worktree remain the source of truth; verify them before starting work.
 ## Current State
 
 - Branch: `main`
-- Latest verified commit: `9b9eb9b` (`Validate ACME challenge routing`)
-- Working tree at handoff creation: clean
+- Latest verified commit: `0c42ae1` (`Extract related links from high-value content`)
+- Working tree after feature commit: preserve unrelated local documentation and skill changes
 - Deployment: Docker Compose
 - Production resource constraint: 2 GB RAM with swap enabled
-- Backend verification: 52 tests passed; Ruff passed
+- Backend verification: 59 tests passed; Ruff passed
 - Frontend verification: 9 tests passed; TypeScript check passed
 - Compose configuration: validated with non-secret placeholder environment variables
 
@@ -26,6 +26,10 @@ worktree remain the source of truth; verify them before starting work.
 
 ## Important Recent Work
 
+- Added deterministic related-link extraction for high-value content. A separate bounded Worker
+  stage processes at most three new or existing analyzed items per cycle, fetches each original
+  page once, retains at most five real HTTP/HTTPS references, and exposes them in intelligence
+  details, collection details, and Markdown reports without another model call or linked-page crawl.
 - Added source discovery: the Sources page now has an "自动发现" button; maintainers can enter a website homepage, preview the discovered RSS/Atom feed with article samples, and confirm to atomically create an active source and healthy endpoint. Backend re-validates the feed at install time.
 - Added bounded RSS/Atom self-healing: invalid or HTML endpoint responses use feed autodiscovery
   and a small same-site candidate set, broken feed URLs can recover through the configured source
