@@ -15,6 +15,10 @@ def test_report_blocks_markdown_and_unsafe_url_injection():
         analysis_summary="---",
         testing_value_analysis="> forged quote",
         applicable_scenarios=["[malicious](javascript:alert(1))"],
+        related_links=[
+            {"title": "Bad link", "url": "javascript:alert(1)"},
+            {"title": "Safe reference", "url": "https://example.org/reference"},
+        ],
     )
 
     report = render_markdown_report([item], datetime(2026, 8, 30, tzinfo=UTC))
@@ -24,6 +28,8 @@ def test_report_blocks_markdown_and_unsafe_url_injection():
     assert "\n&gt; forged quote\n" in report
     assert "\\[malicious\\]" in report
     assert "<img" not in report
+    assert "[Bad link]" not in report
+    assert "[Safe reference](https://example.org/reference)" in report
     assert "无有效 HTTP/HTTPS 链接" in report
 
 

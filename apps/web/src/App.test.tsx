@@ -56,7 +56,8 @@ describe('management radar workflow', () => {
       analysis_status: 'analyzed', testing_relevance_score: 88, testing_value_score: 92,
       analysis_summary: 'A concise testing intelligence summary', testing_value_analysis: 'Useful for autonomous regression testing.',
       applicable_scenarios: ['Regression testing'], adoption_suggestions: ['Start with a controlled pilot'],
-      analysis_risks: ['False positives'], analysis_tags: ['AI Agent', 'Testing'], analysis_model: 'test-model', analyzed_at: '2026-08-21T01:00:00Z',
+      analysis_risks: ['False positives'], analysis_tags: ['AI Agent', 'Testing'],
+      related_links: [{ title: 'Evaluation benchmark', url: 'https://example.org/benchmark' }], analysis_model: 'test-model', analyzed_at: '2026-08-21T01:00:00Z',
     }
     const fetchMock = vi.spyOn(globalThis, 'fetch')
       .mockResolvedValueOnce(json({ id: 'user-1', username: 'reader', role: 'viewer' }))
@@ -89,6 +90,7 @@ describe('management radar workflow', () => {
     await userEvent.click(screen.getByRole('button', { name: /Agents gain new tools/ }))
     expect(await screen.findByText('测试价值分析')).toBeInTheDocument()
     expect(screen.getByText('Useful for autonomous regression testing.')).toBeInTheDocument()
+    expect(screen.getByRole('link', { name: /Evaluation benchmark/ })).toHaveAttribute('href', 'https://example.org/benchmark')
     expect(screen.getByRole('link', { name: /查看原文/ })).toHaveAttribute('href', item.url)
   })
 

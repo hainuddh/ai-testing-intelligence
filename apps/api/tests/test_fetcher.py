@@ -5,6 +5,7 @@ import pytest
 from app.fetcher import (
     download,
     download_feed,
+    extract_related_links,
     fetch_endpoint,
     parse_feed,
     parse_web,
@@ -66,6 +67,31 @@ def test_parse_rss_and_web_content():
     assert page[0].summary == "Metadata summary"
     assert "Useful body" in (page[0].body or "")
     assert "noise" not in (page[0].body or "")
+
+
+def test_extract_related_links_prioritizes_article_links_and_removes_tracking():
+    page = b"""<html><body>
+    <nav><a href="/login">Login</a></nav>
+    <main>
+      <a href="/article?utm_source=rss">Current article</a>
+      <a href="https://conference.example/testing?utm_medium=article">Testing conference</a>
+      <a href="/change-impact">Change impact analysis</a>
+      <a href="http://127.0.0.1/admin">Internal service</a>
+      <a href="/image.png">Architecture image</a>
+    </main>
+    <footer><a href="/about">About</a></footer>
+    </body></html>"""
+
+    links = extract_related_links(
+        page,
+        "https://example.com/article?utm_source=rss",
+        ["Testing change impact analysis"],
+    )
+
+    assert links == [
+        {"title": "Testing conference", "url": "https://conference.example/testing"},
+        {"title": "Change impact analysis", "url": "https://example.com/change-impact"},
+    ]
 
 
 def test_parse_rss_publication_date():

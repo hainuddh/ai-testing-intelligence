@@ -50,6 +50,9 @@ def test_list_filter_and_get_content(client, db_session):
         testing_value_score=90,
         analysis_summary="Testing summary",
         testing_value_analysis="Testing value",
+        related_links=[
+            {"title": "Regression benchmark", "url": "https://tools.example/benchmark"}
+        ],
     )
     db_session.add_all(
         [
@@ -80,6 +83,7 @@ def test_list_filter_and_get_content(client, db_session):
     assert response.json()["items"][0]["source_name"] == "First"
     assert detail.status_code == 200
     assert detail.json()["source_id"] == first_source.id
+    assert detail.json()["related_links"][0]["title"] == "Regression benchmark"
     assert client.get("/api/v1/content/9999", headers=headers).status_code == 404
 
     ranged = client.get(
@@ -125,6 +129,9 @@ def test_export_selected_content_as_markdown(client, db_session):
         adoption_suggestions=["先在低风险模块进行对照试验"],
         analysis_risks=["错误断言可能导致误报"],
         analysis_tags=["AI Agent", "回归测试"],
+        related_links=[
+            {"title": "Agent evaluation", "url": "https://example.org/evaluation"}
+        ],
     )
     second = ContentItem(
         source_id=source.id,
@@ -164,6 +171,8 @@ def test_export_selected_content_as_markdown(client, db_session):
     assert response.headers["x-content-type-options"] == "nosniff"
     report = response.text
     assert report.startswith("# 软件测试技术情报报告")
+    assert "### 相关链接" in report
+    assert "[Agent evaluation](https://example.org/evaluation)" in report
     assert report.index("## 1. 视觉模型 UI 测试") < report.index(
         "## 2. AI Agent 回归测试实践"
     )

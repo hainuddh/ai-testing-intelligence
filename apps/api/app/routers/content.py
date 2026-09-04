@@ -31,6 +31,7 @@ _LIST_LOAD = (
     ContentItem.adoption_suggestions,
     ContentItem.analysis_risks,
     ContentItem.analysis_tags,
+    ContentItem.related_links,
     ContentItem.analysis_model,
     ContentItem.analyzed_at,
 )

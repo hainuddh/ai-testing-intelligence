@@ -60,6 +60,7 @@ type ContentItem = {
   adoption_suggestions: string[]
   analysis_risks: string[]
   analysis_tags: string[]
+  related_links: { title: string; url: string }[]
   analysis_model: string | null
   analyzed_at: string | null
 }
@@ -91,6 +92,7 @@ type CollectedItem = {
   analysis_attempts: number
   testing_relevance_score: number | null
   testing_value_score: number | null
+  related_links?: { title: string; url: string }[]
   analysis_error: string | null
   analyzed_at: string | null
 }
@@ -715,6 +717,7 @@ function IntelligenceModal({ item, onClose }: { item: ContentItem | null; onClos
     <Section title="测试价值分析" text={item.testing_value_analysis} />
     <div className="intel-columns"><Section title="适用测试场景" values={item.applicable_scenarios} /><Section title="落地验证建议" values={item.adoption_suggestions} /></div>
     <Section title="风险与边界" values={item.analysis_risks} />
+    {item.related_links?.length > 0 && <section className="intel-section related-links"><h3>相关链接</h3><ul>{item.related_links.map((link) => <li key={link.url}><a href={link.url} target="_blank" rel="noreferrer">{link.title} <ArrowRightOutlined /></a></li>)}</ul></section>}
     <div className="intel-tags">{item.analysis_tags.map((tag) => <Tag key={tag}>{tag}</Tag>)}</div>
     <a className="original-link" href={item.url} target="_blank" rel="noreferrer">查看原文（外部链接） <ArrowRightOutlined /></a>
   </Modal>
@@ -789,6 +792,7 @@ function CollectedContentModal({ item, onClose }: { item: CollectedItem | null; 
     <h2>{item.title}</h2>
     <div className="intel-meta"><span>{item.source_name}</span><Tag color={item.analysis_status === 'analyzed' ? 'green' : item.analysis_status === 'failed' ? 'red' : item.analysis_status === 'filtered' ? 'default' : 'blue'}>{analysisStatusLabels[item.analysis_status]}</Tag><span>相关性 {item.testing_relevance_score ?? '-'}</span><span>价值 {item.testing_value_score ?? '-'}</span></div>
     <section className="intel-section"><h3>原始摘要</h3><p>{item.summary || '暂无摘要'}</p></section>
+    {item.related_links && item.related_links.length > 0 && <section className="intel-section related-links"><h3>相关链接</h3><ul>{item.related_links.map((link) => <li key={link.url}><a href={link.url} target="_blank" rel="noreferrer">{link.title} <ArrowRightOutlined /></a></li>)}</ul></section>}
     <div className="collected-detail-grid"><div><span>发布时间</span><strong>{dateTimeText(item.published_at)}</strong></div><div><span>采集时间</span><strong>{dateTimeText(item.fetched_at)}</strong></div><div><span>分析时间</span><strong>{dateTimeText(item.analyzed_at)}</strong></div><div><span>分析次数</span><strong>{item.analysis_attempts}</strong></div></div>
     {item.analysis_error && <section className="intel-section collected-error"><h3>失败原因</h3><p>{item.analysis_error}</p></section>}
     <a className="original-link" href={item.url} target="_blank" rel="noreferrer">查看原文（外部链接） <ArrowRightOutlined /></a>

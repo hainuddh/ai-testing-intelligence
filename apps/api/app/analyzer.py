@@ -62,6 +62,8 @@ TESTING_SIGNAL_PATTERN = re.compile(
     r"测试|质量|评测|评估|验证|可靠性|鲁棒性|安全|红队|基准|缺陷|故障|回归|断言|可观测性|监控",
     re.IGNORECASE,
 )
+RELATED_LINK_VALUE_THRESHOLD = 60
+RELATED_LINK_BATCH_SIZE = 3
 
 
 def clamp_score(value: object) -> int:
@@ -181,10 +183,52 @@ def apply_analysis(item: ContentItem, analysis: TestingAnalysis) -> None:
     item.adoption_suggestions = analysis.adoption_suggestions
     item.analysis_risks = analysis.risks
     item.analysis_tags = analysis.tags
+    item.related_links = []
+    item.related_links_extracted_at = None
     item.analysis_model = settings.analysis_model
     item.analysis_error = None
     item.analyzed_at = datetime.now(UTC)
     item.next_analysis_at = None
+
+
+def enrich_pending_related_links(db: Session) -> int:
+    from app.fetcher import download, extract_related_links
+
+    items = list(
+        db.scalars(
+            select(ContentItem)
+            .options(selectinload(ContentItem.source))
+            .where(
+                ContentItem.analysis_status == "analyzed",
+                ContentItem.testing_value_score >= RELATED_LINK_VALUE_THRESHOLD,
+                ContentItem.related_links_extracted_at.is_(None),
+            )
+            .order_by(ContentItem.fetched_at.desc())
+            .limit(RELATED_LINK_BATCH_SIZE)
+        )
+    )
+    for item in items:
+        item.related_links = []
+        if item.source.source_type not in {"wechat", "weibo"}:
+            try:
+                page_url, data, _content_type = download(item.url)
+                item.related_links = extract_related_links(
+                    data,
+                    page_url,
+                    [
+                        item.title,
+                        item.analysis_summary or "",
+                        item.testing_value_analysis or "",
+                        *(item.applicable_scenarios or []),
+                        *(item.analysis_tags or []),
+                    ],
+                )
+            except Exception:
+                # Optional evidence must not fail or indefinitely retry the analysis.
+                pass
+        item.related_links_extracted_at = datetime.now(UTC)
+        db.commit()
+    return len(items)
 
 
 def analyze_pending(db: Session) -> tuple[int, int]:
@@ -216,12 +260,15 @@ def analyze_pending(db: Session) -> tuple[int, int]:
             item.analysis_status = "filtered"
             item.testing_relevance_score = 0
             item.testing_value_score = 0
+            item.related_links = []
+            item.related_links_extracted_at = None
             item.analysis_error = None
             item.next_analysis_at = None
             db.commit()
             continue
         try:
-            apply_analysis(item, analyze_content(item))
+            analysis = analyze_content(item)
+            apply_analysis(item, analysis)
             analyzed += 1
         except Exception as exc:
             item.analysis_status = "failed"

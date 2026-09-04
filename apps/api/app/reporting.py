@@ -60,6 +60,16 @@ def bullet_list(values: list[str]) -> str:
     return "\n".join(f"- {safe_markdown(inline_text(value))}" for value in values)
 
 
+def related_link_list(values: list[dict[str, str]]) -> str:
+    links = []
+    for value in values:
+        title = value.get("title")
+        url = safe_url(value.get("url", ""))
+        if title and url:
+            links.append(f"- [{safe_markdown(inline_text(title))}]({url})")
+    return "\n".join(links) or "- 暂无"
+
+
 def report_date(item: ContentItem) -> str:
     value = item.published_at or item.fetched_at
     if value.tzinfo is None:
@@ -119,6 +129,10 @@ def render_markdown_report(items: list[ContentItem], generated_at: datetime | No
                 "### 风险与边界",
                 "",
                 bullet_list(item.analysis_risks or []),
+                "",
+                "### 相关链接",
+                "",
+                related_link_list(item.related_links or []),
                 "",
                 (
                     f"**原文链接**：[查看原文]({safe_url(item.url)})"

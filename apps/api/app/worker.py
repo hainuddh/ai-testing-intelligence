@@ -5,7 +5,7 @@ from datetime import UTC, datetime, timedelta
 from sqlalchemy import func, select, text
 from sqlalchemy.orm import Session
 
-from app.analyzer import analyze_pending
+from app.analyzer import analyze_pending, enrich_pending_related_links
 from app.cache import delete_prefix_sync
 from app.config import settings
 from app.database import engine
@@ -41,6 +41,7 @@ def run_analysis() -> None:
     if engine.dialect.name != "postgresql":
         with Session(engine) as db:
             analyzed, failed = analyze_pending(db)
+            links_enriched = enrich_pending_related_links(db)
     else:
         with engine.connect() as lock_connection:
             if not lock_connection.scalar(text("SELECT pg_try_advisory_lock(82429102)")):
@@ -48,13 +49,17 @@ def run_analysis() -> None:
             try:
                 with Session(engine) as db:
                     analyzed, failed = analyze_pending(db)
+                    links_enriched = enrich_pending_related_links(db)
             finally:
                 lock_connection.execute(text("SELECT pg_advisory_unlock(82429102)"))
     if analyzed or failed:
         logger.info("Analyzed content succeeded=%s failed=%s", analyzed, failed)
-    if analyzed:
+    if links_enriched:
+        logger.info("Enriched related links items=%s", links_enriched)
+    if analyzed or links_enriched:
         delete_prefix_sync("content:list")
         delete_prefix_sync("content:item")
+        delete_prefix_sync("collected:list")
 
 
 def run_once() -> None:

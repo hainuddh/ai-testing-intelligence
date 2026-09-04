@@ -1,11 +1,12 @@
 import ipaddress
+import re
 import socket
 import time
 from dataclasses import dataclass
 from datetime import UTC, datetime
 from email.utils import parsedate_to_datetime
 from html.parser import HTMLParser
-from urllib.parse import urljoin, urlparse
+from urllib.parse import parse_qsl, unquote, urlencode, urljoin, urlparse, urlsplit, urlunsplit
 from xml.etree import ElementTree
 
 import httpx
@@ -106,6 +107,174 @@ class FeedDiscoveryParser(HTMLParser):
             "application/atom+xml",
         } and href:
             self.urls.append(urljoin(self.base_url, href))
+
+
+class RelatedLinkParser(HTMLParser):
+    def __init__(self, base_url: str) -> None:
+        super().__init__()
+        self.base_url = base_url
+        self.content_depth = 0
+        self.ignored_depth = 0
+        self.current_href: str | None = None
+        self.current_title = ""
+        self.current_text: list[str] = []
+        self.current_in_content = False
+        self.links: list[tuple[str, str, bool]] = []
+
+    def handle_starttag(self, tag: str, attrs: list[tuple[str, str | None]]) -> None:
+        tag = tag.lower()
+        if tag in {"script", "style", "noscript", "svg", "nav", "header", "footer"}:
+            self.ignored_depth += 1
+        if tag in {"article", "main"}:
+            self.content_depth += 1
+        if tag != "a" or self.ignored_depth:
+            return
+        values = {name.lower(): value for name, value in attrs if value is not None}
+        href = values.get("href")
+        if href:
+            self.current_href = href
+            self.current_title = values.get("title", "")
+            self.current_text = []
+            self.current_in_content = self.content_depth > 0
+
+    def handle_endtag(self, tag: str) -> None:
+        tag = tag.lower()
+        if tag == "a" and self.current_href is not None:
+            title = " ".join(self.current_text).strip() or self.current_title.strip()
+            if title and len(self.links) < 500:
+                self.links.append(
+                    (
+                        title,
+                        urljoin(self.base_url, self.current_href),
+                        self.current_in_content,
+                    )
+                )
+            self.current_href = None
+            self.current_title = ""
+            self.current_text = []
+            self.current_in_content = False
+        if tag in {"article", "main"} and self.content_depth:
+            self.content_depth -= 1
+        if (
+            tag in {"script", "style", "noscript", "svg", "nav", "header", "footer"}
+            and self.ignored_depth
+        ):
+            self.ignored_depth -= 1
+
+    def handle_data(self, data: str) -> None:
+        if self.current_href is not None and not self.ignored_depth:
+            text = " ".join(data.split())
+            if text:
+                self.current_text.append(text)
+
+
+RELATED_LINK_SKIP_TEXT = re.compile(
+    r"^(?:home|homepage|login|log in|sign in|sign up|register|more|read more|click here|"
+    r"首页|主页|登录|注册|更多|阅读全文|点击这里|关于我们|联系我们|投稿)$",
+    re.IGNORECASE,
+)
+RELATED_LINK_SKIP_PATH = re.compile(
+    r"/(?:login|signin|signup|register|account|about|contact|privacy|terms|search)(?:/|$)",
+    re.IGNORECASE,
+)
+RELATED_LINK_SKIP_EXTENSION = re.compile(
+    r"\.(?:avif|css|gif|ico|jpe?g|js|png|svg|webp|woff2?)(?:$|\?)", re.IGNORECASE
+)
+RELATED_LINK_SKIP_HOSTS = {
+    "facebook.com",
+    "linkedin.com",
+    "twitter.com",
+    "x.com",
+}
+
+
+def normalized_link_url(url: str) -> str | None:
+    if (
+        len(url) > 2048
+        or "\\" in url
+        or any(ord(character) < 32 or ord(character) == 127 for character in url)
+    ):
+        return None
+    decoded = unquote(url)
+    if any(ord(character) < 32 or ord(character) == 127 for character in decoded):
+        return None
+    try:
+        parsed = urlsplit(url)
+        port = parsed.port
+    except ValueError:
+        return None
+    if (
+        parsed.scheme.lower() not in {"http", "https"}
+        or not parsed.hostname
+        or parsed.username is not None
+        or parsed.password is not None
+    ):
+        return None
+    try:
+        hostname = parsed.hostname.encode("idna").decode("ascii")
+    except UnicodeError:
+        return None
+    if hostname == "localhost" or hostname.endswith(".local"):
+        return None
+    try:
+        if not ipaddress.ip_address(hostname).is_global:
+            return None
+    except ValueError:
+        pass
+    if ":" in hostname:
+        hostname = f"[{hostname}]"
+    authority = f"{hostname}:{port}" if port is not None else hostname
+    query = urlencode(
+        [
+            (name, value)
+            for name, value in parse_qsl(parsed.query, keep_blank_values=True)
+            if not name.lower().startswith("utm_")
+        ]
+    )
+    return urlunsplit((parsed.scheme.lower(), authority, parsed.path or "/", query, ""))
+
+
+def extract_related_links(
+    data: bytes, page_url: str, relevance_terms: list[str], limit: int = 5
+) -> list[dict[str, str]]:
+    parser = RelatedLinkParser(page_url)
+    parser.feed(data.decode("utf-8", errors="replace"))
+    page_identity = normalized_link_url(page_url)
+    page_hostname = urlparse(page_url).hostname
+    has_content_links = any(in_content for _, _, in_content in parser.links)
+    terms = {
+        token.lower()
+        for value in relevance_terms
+        for token in re.findall(r"[A-Za-z][A-Za-z0-9+#.-]{2,}|[\u4e00-\u9fff]{2,8}", value)
+    }
+    candidates: list[tuple[int, int, dict[str, str]]] = []
+    seen: set[str] = set()
+    for position, (title, raw_url, in_content) in enumerate(parser.links):
+        title = " ".join(title.split())[:200]
+        url = normalized_link_url(raw_url)
+        if (
+            not url
+            or url == page_identity
+            or url in seen
+            or RELATED_LINK_SKIP_TEXT.fullmatch(title)
+            or RELATED_LINK_SKIP_PATH.search(urlparse(url).path)
+            or RELATED_LINK_SKIP_EXTENSION.search(url)
+            or (has_content_links and not in_content)
+        ):
+            continue
+        seen.add(url)
+        hostname = urlparse(url).hostname
+        normalized_hostname = (hostname or "").removeprefix("www.")
+        score = 10 if in_content else 0
+        if normalized_hostname in RELATED_LINK_SKIP_HOSTS:
+            continue
+        if hostname and page_hostname and hostname != page_hostname:
+            score += 2
+        lowered_title = title.lower()
+        score += min(3, sum(term in lowered_title for term in terms))
+        candidates.append((score, position, {"title": title, "url": url}))
+    candidates.sort(key=lambda candidate: (-candidate[0], candidate[1]))
+    return [candidate[2] for candidate in candidates[:limit]]
 
 
 def feed_candidates(data: bytes, page_url: str) -> list[str]:
@@ -358,6 +527,8 @@ def fetch_endpoint(db: Session, endpoint: SourceEndpoint) -> FetchRun:
                     existing.fetched_at = datetime.now(UTC)
                     existing.analysis_status = "pending"
                     existing.analysis_attempts = 0
+                    existing.related_links = []
+                    existing.related_links_extracted_at = None
                     existing.analysis_error = None
                     existing.next_analysis_at = None
                     updated = True

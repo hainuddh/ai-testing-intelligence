@@ -150,6 +150,11 @@ class EndpointResponse(BaseModel):
     created_at: datetime
 
 
+class RelatedLink(BaseModel):
+    title: str = Field(min_length=1, max_length=200)
+    url: HttpUrl
+
+
 class ContentItemResponse(BaseModel):
     model_config = ConfigDict(from_attributes=True)
 
@@ -170,6 +175,7 @@ class ContentItemResponse(BaseModel):
     adoption_suggestions: list[str]
     analysis_risks: list[str]
     analysis_tags: list[str]
+    related_links: list[RelatedLink] = Field(default_factory=list)
     analysis_model: str | None
     analyzed_at: datetime | None
 
@@ -198,6 +204,7 @@ class CollectedContentResponse(BaseModel):
     analysis_attempts: int
     testing_relevance_score: int | None
     testing_value_score: int | None
+    related_links: list[RelatedLink] = Field(default_factory=list)
     analysis_error: str | None
     analyzed_at: datetime | None
 

@@ -101,6 +101,10 @@ class ContentItem(Base):
     adoption_suggestions: Mapped[list[str]] = mapped_column(JSON, default=list)
     analysis_risks: Mapped[list[str]] = mapped_column(JSON, default=list)
     analysis_tags: Mapped[list[str]] = mapped_column(JSON, default=list)
+    related_links: Mapped[list[dict[str, str]]] = mapped_column(JSON, default=list)
+    related_links_extracted_at: Mapped[datetime | None] = mapped_column(
+        DateTime(timezone=True), nullable=True
+    )
     analysis_model: Mapped[str | None] = mapped_column(String(200), nullable=True)
     analysis_error: Mapped[str | None] = mapped_column(Text, nullable=True)
     analyzed_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
