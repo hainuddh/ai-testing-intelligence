@@ -1,0 +1,16 @@
+[project]
+sub_id = "d6048ed2"
+name = "ai-testing-intelligence"
+requires = ["nodejs-24"]
+project_type = "web"
+version = "0.0.35"
+
+[preview]
+preview_enable = "enabled"
+
+[dev]
+build = ["bash", "scripts/preview-build.sh"]
+run = ["bash", "scripts/preview-run.sh"]
+
+[subprojects]
+path = ["."]

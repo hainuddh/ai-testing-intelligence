@@ -1,4 +1,5 @@
 .env
+.preview
 .venv/
 backups/
 deploy/*.log
