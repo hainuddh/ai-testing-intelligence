@@ -31,6 +31,7 @@ AI 测试情报雷达（Signal Atlas / 技术情报雷达）—— 智能测试�
 - Node 项目只用 pnpm；Python 用 uv + 项目内 `.venv`。
 - 后端依赖安装用阿里云 PyPI 镜像（`--index-url https://mirrors.aliyun.com/pypi/simple/`），否则下载极慢。
 - 不修改已创建的 `sub_id`（d6048ed2）。
+- **分支开发约定（长期约束）**：启动开发新功能前，必须先向用户确认是否新建分支；仅在用户明确同意后才创建新分支。不得擅自切分支，也不得直接在 `main` 主分支上开发新功能。
 - **记账界定（长期约定）**：为在 coze 沙箱环境预览/部署而做的改动（`.coze`、`.preview`、`.gitignore`、`scripts/*`、`AGENTS.md` 中部署/预览相关内容）**不计入"代码修改"**；后续核对/统计代码变更量时予以排除。业务代码仅指 `apps/web/src/**`、`apps/api/app/**`、`apps/api/migrations/**`、`docs/**` 等产品源码与文档。此项仅作记账口径，不做任何 git 回滚/移除跟踪动作。
 - **TDD 开发模式（长期约束）**：所有开发遵循 TDD——先写失败测试（Red）→ 写最小实现使其通过（Green）→ 重构（Refactor）。前端用 vitest（`apps/web` 下 `pnpm exec vitest`，用例在 `apps/web/src/App.test.tsx`）；后端用 pytest（`apps/api` 下 `.venv/bin/pytest`，用例在 `apps/api/tests/`）。任何功能改动需先补写/调整对应测试用例，再写实现，最后跑测试确认全部通过才能视为完成。
 - **GitHub 追踪功能（长期约定）**：MVP 三大决策——① 鉴权暂不接 PAT，`ATI_GITHUB_TOKEN`（`Settings.github_token`）预留，采集客户端 token 为空不带 Bearer、非空则带，切换免改业务代码；② 报告只做站内展示 + Markdown 导出（复用现有 content 导出），推送（邮件/IM）延后；③ 分析「确定性动量打分（纯函数，不调 LLM）+ 轻量 LLM 摘要（高置信候选批量一次）+ 日报深度情报分析（项目摘要/测试价值分析/应用场景推荐/落地建议，复用内容情报分析 LLM 配置 `ATI_ANALYSIS_*`，日报生成时对入选仓库幂等调用）」；周报/月报聚合与站外推送仍延后。自动发现走 `Search API`（无 token 10 req/min 独立桶），持续快照走 `Core API`（无 token 60 req/h，规模化需 token）。详见 `docs/github-tracking-plan.md`、`docs/github-auto-discovery-plan.md`。
