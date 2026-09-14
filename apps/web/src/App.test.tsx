@@ -340,4 +340,73 @@ describe('management radar workflow', () => {
       body: JSON.stringify({ username: 'viewer1', password: 'password123', role: 'viewer', is_active: true }),
     }))
   })
+
+  it('lists GitHub candidates and switches one to watched', async () => {
+    localStorage.setItem('access_token', 'existing-token')
+    const user = userEvent.setup()
+    const repo = {
+      id: 7,
+      full_name: 'acme/awesome-agent',
+      description: 'An agent framework',
+      html_url: 'https://github.com/acme/awesome-agent',
+      primary_language: 'Python',
+      topics: ['ai', 'agent'],
+      stars: 120,
+      forks: 8,
+      status: 'discovered',
+      momentum_score: 72.5,
+      momentum_tier: 'new_notable',
+      summary: null,
+      repo_pushed_at: '2026-09-01T00:00:00Z',
+      first_seen_at: '2026-09-10T00:00:00Z',
+    }
+    const fetchMock = vi.spyOn(globalThis, 'fetch')
+      .mockResolvedValueOnce(json({ id: 'user-2', username: 'maintainer', role: 'maintainer' }))
+      .mockResolvedValueOnce(json({ items: [], total: 0 }))
+      .mockResolvedValueOnce(json({ items: [repo], total: 1 }))
+      .mockResolvedValueOnce(json({ items: [], total: 0 }))
+      .mockResolvedValueOnce(json({ ...repo, status: 'watched' }))
+      .mockResolvedValueOnce(json({ items: [{ ...repo, status: 'watched' }], total: 1 }))
+
+    render(<App />)
+    await screen.findByRole('heading', { name: '内容情报' })
+    await user.click(screen.getByRole('button', { name: 'GitHub 追踪' }))
+    await screen.findByText('acme/awesome-agent')
+    await user.click(screen.getByRole('button', { name: /关注/ }))
+
+    await waitFor(() => expect(fetchMock).toHaveBeenCalledWith('/api/v1/github/repos/7/status', expect.objectContaining({
+      method: 'PATCH',
+      body: JSON.stringify({ status: 'watched' }),
+    })))
+  })
+
+  it('generates a GitHub daily report', async () => {
+    localStorage.setItem('access_token', 'existing-token')
+    const user = userEvent.setup()
+    const report = {
+      id: 3,
+      report_type: 'daily',
+      title: 'GitHub 项目日报 2026-09-10',
+      body_markdown: '# GitHub 项目日报',
+      status: 'ready',
+      generated_at: '2026-09-10T00:00:00Z',
+      items: [],
+    }
+    const fetchMock = vi.spyOn(globalThis, 'fetch')
+      .mockResolvedValueOnce(json({ id: 'user-2', username: 'maintainer', role: 'maintainer' }))
+      .mockResolvedValueOnce(json({ items: [], total: 0 }))
+      .mockResolvedValueOnce(json({ items: [], total: 0 }))
+      .mockResolvedValueOnce(json({ items: [], total: 0 }))
+      .mockResolvedValueOnce(json(report, 201))
+      .mockResolvedValueOnce(json({ items: [report], total: 1 }))
+
+    render(<App />)
+    await screen.findByRole('heading', { name: '内容情报' })
+    await user.click(screen.getByRole('button', { name: 'GitHub 追踪' }))
+    await user.click(screen.getByRole('button', { name: /生成今日日报/ }))
+
+    await waitFor(() => expect(fetchMock).toHaveBeenCalledWith('/api/v1/github/reports/generate', expect.objectContaining({
+      method: 'POST',
+    })))
+  })
 })

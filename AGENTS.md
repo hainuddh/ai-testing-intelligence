@@ -10,6 +10,7 @@ AI 测试情报雷达（Signal Atlas / 技术情报雷达）—— 智能测试�
 ## 目录结构
 - `apps/web/src/App.tsx` — 前端主入口（单文件 SPA，含登录、情报雷达、信源管理、采集内容、用户管理等视图）
 - `apps/api/app/` — FastAPI 应用（`main.py`、`routers/`、`models.py`、`analyzer.py`、`fetcher.py`、`worker.py`）
+- `apps/api/app/github_*.py` — GitHub 追踪模块（`github_client.py` Search API 客户端、`github_discovery.py` 候选解析/打分、`github_momentum.py` 确定性动量分、`github_summary.py` 轻量摘要、`github_service.py` 发现/关注/日报编排）
 - `apps/api/migrations/` — Alembic 迁移（SQLite 与 PostgreSQL 共用）
 - `scripts/` — 部署/预览包装脚本
 - `docs/` — 部署中文指南、上线操作记录、用户手册
@@ -18,6 +19,8 @@ AI 测试情报雷达（Signal Atlas / 技术情报雷达）—— 智能测试�
 - 前端 Vite dev server：`apps/web` 下 `pnpm exec vite --host 0.0.0.0 --port <port>`，proxy `/api` → `localhost:8000`
 - 后端：`apps/api` 下 `uv run uvicorn app.main:app`，API 统一前缀 `/api/v1`（含 `/health`）
 - 数据库迁移：`apps/api` 下 `.venv/bin/alembic upgrade head`
+- GitHub 追踪 API（`routers/github.py`，前缀 `/api/v1/github`）：`POST /discover` 手动触发自动发现、`GET /repos` 候选列表（`?status=` 过滤）、`PATCH /repos/{id}/status` 关注/忽略、`GET /reports` 日报列表、`POST /reports/generate` 生成日报、`GET /reports/{id}` 详情；写操作需 maintainer 权限。
+- GitHub 追踪数据表：`github_repos`（候选/追踪仓库 + 动量分 + 摘要）、`github_snapshots`（时序快照）、`github_reports` / `github_report_items`（日报）；worker 每轮经 `discovery_due`（默认 24h 间隔）自动触发发现。
 - 预览脚本：`scripts/preview-build.sh` / `scripts/preview-run.sh`
 - 部署脚本：`scripts/deploy-build.sh` / `scripts/deploy-run.sh`（run 阶段用零依赖 Node 静态服务器 `scripts/static-server.mjs` 服务 `apps/web/dist`，支持 SPA fallback）
 

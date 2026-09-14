@@ -5,27 +5,38 @@ import {
   DeleteOutlined,
   DownloadOutlined,
   EditOutlined,
+  EyeOutlined,
   FileSearchOutlined,
+  FileTextOutlined,
+  GithubOutlined,
   GlobalOutlined,
   InboxOutlined,
   LogoutOutlined,
   PlusOutlined,
   RadarChartOutlined,
+  RocketOutlined,
+  StarFilled,
+  StopOutlined,
   TeamOutlined,
 } from '@ant-design/icons'
 import {
   Alert,
   Button,
   Checkbox,
+  Divider,
   Drawer,
   Form,
   Input,
+  List,
   Modal,
   Pagination,
   Select,
+  Space,
   Spin,
   Switch,
+  Table,
   Tag,
+  Typography,
 } from 'antd'
 import type { FormInstance } from 'antd'
 
@@ -98,7 +109,41 @@ type CollectedItem = {
 }
 type UserForm = { username: string; password?: string; role: Role; is_active: boolean }
 type DatabaseCounts = { dialect: string; users: number; sources: number; source_endpoints: number; content_items: number; fetch_runs: number }
-type Tab = 'content' | 'sources' | 'collection' | 'users' | 'database'
+type GitHubRepo = {
+  id: number
+  full_name: string
+  description: string | null
+  html_url: string
+  primary_language: string | null
+  topics: string[]
+  stars: number
+  forks: number
+  status: 'discovered' | 'watched' | 'tracked' | 'ignored'
+  momentum_score: number | null
+  momentum_tier: string | null
+  summary: string | null
+  repo_pushed_at: string | null
+  first_seen_at: string
+}
+type GitHubReportItem = {
+  id: number
+  repo_id: number
+  rank: number
+  momentum_tier: string | null
+  highlight: string | null
+  star_delta_24h: number | null
+  star_delta_7d: number | null
+}
+type GitHubReport = {
+  id: number
+  report_type: string
+  title: string
+  body_markdown: string | null
+  status: string
+  generated_at: string
+  items: GitHubReportItem[]
+}
+type Tab = 'content' | 'sources' | 'collection' | 'users' | 'database' | 'github'
 
 const typeLabels: Record<string, string> = { website: '网站', newsletter: '通讯', rss: 'RSS', social: '社交媒体', wechat: '微信公众号', weibo: '微博' }
 const trustLabels: Record<number, string> = { 5: '最高可信', 4: '高可信', 3: '待验证', 2: '观察中', 1: '低可信' }
@@ -163,6 +208,13 @@ export default function App() {
   const contentCache = useRef<Map<string, { items: ContentItem[]; total: number; ts: number }>>(new Map())
   const CACHE_TTL = 30_000
   const [database, setDatabase] = useState<DatabaseCounts | null>(null)
+  const [githubRepos, setGithubRepos] = useState<GitHubRepo[]>([])
+  const [githubRepoTotal, setGithubRepoTotal] = useState(0)
+  const [githubStatusFilter, setGithubStatusFilter] = useState('')
+  const [githubReports, setGithubReports] = useState<GitHubReport[]>([])
+  const [githubLoading, setGithubLoading] = useState(false)
+  const [githubDiscovering, setGithubDiscovering] = useState(false)
+  const [githubReport, setGithubReport] = useState<GitHubReport | null>(null)
   const [loading, setLoading] = useState(false)
   const [saving, setSaving] = useState(false)
   const [error, setError] = useState('')
@@ -414,6 +466,70 @@ export default function App() {
     }
   }
 
+  const loadGithubRepos = async (status?: string) => {
+    setGithubLoading(true)
+    setError('')
+    try {
+      const params = new URLSearchParams()
+      const actualStatus = status ?? githubStatusFilter
+      if (actualStatus) params.set('status', actualStatus)
+      const data = await request<{ items: GitHubRepo[]; total: number }>(`/api/v1/github/repos?${params}`)
+      setGithubRepos(data.items)
+      setGithubRepoTotal(data.total)
+    } catch (requestError) {
+      setError(requestError instanceof Error ? requestError.message : '加载 GitHub 追踪失败')
+    } finally {
+      setGithubLoading(false)
+    }
+  }
+
+  const loadGithubReports = async () => {
+    try {
+      const data = await request<{ items: GitHubReport[]; total: number }>('/api/v1/github/reports')
+      setGithubReports(data.items)
+    } catch (requestError) {
+      setError(requestError instanceof Error ? requestError.message : '加载 GitHub 日报失败')
+    }
+  }
+
+  const changeGithubStatusFilter = (status: string) => {
+    setGithubStatusFilter(status)
+    void loadGithubRepos(status)
+  }
+
+  const runGithubDiscover = async () => {
+    setGithubDiscovering(true)
+    setError('')
+    try {
+      await request<{ discovered: number }>('/api/v1/github/discover', { method: 'POST', body: '{}' })
+      await loadGithubRepos()
+    } catch (requestError) {
+      setError(requestError instanceof Error ? requestError.message : 'GitHub 自动发现失败')
+    } finally {
+      setGithubDiscovering(false)
+    }
+  }
+
+  const setRepoStatus = async (id: number, status: string) => {
+    setError('')
+    try {
+      await request<GitHubRepo>(`/api/v1/github/repos/${id}/status`, { method: 'PATCH', body: JSON.stringify({ status }) })
+      await loadGithubRepos()
+    } catch (requestError) {
+      setError(requestError instanceof Error ? requestError.message : '更新关注状态失败')
+    }
+  }
+
+  const generateDailyReport = async () => {
+    setError('')
+    try {
+      await request<GitHubReport>('/api/v1/github/reports/generate', { method: 'POST', body: '{}' })
+      await loadGithubReports()
+    } catch (requestError) {
+      setError(requestError instanceof Error ? requestError.message : '生成日报失败')
+    }
+  }
+
   useEffect(() => {
     if (!me) return
     if (tab === 'content') void loadContent()
@@ -421,6 +537,7 @@ export default function App() {
     if (tab === 'collection' && me.role === 'admin') void loadCollectedContent()
     if (tab === 'users' && me.role === 'admin') void loadUsers()
     if (tab === 'database' && me.role === 'admin') void loadDatabase()
+    if (tab === 'github') { void loadGithubRepos(); void loadGithubReports() }
   }, [me, tab])
 
   const login = async (values: { username: string; password: string }) => {
@@ -641,6 +758,7 @@ export default function App() {
     { id: 'collection', label: '采集管理', icon: <InboxOutlined />, admin: true },
     { id: 'users', label: '用户管理', icon: <TeamOutlined />, admin: true },
     { id: 'database', label: '数据库状态', icon: <DatabaseOutlined />, admin: true },
+    { id: 'github', label: 'GitHub 追踪', icon: <GithubOutlined /> },
   ]
 
   return (
@@ -667,6 +785,7 @@ export default function App() {
         {tab === 'collection' && isAdmin && <CollectedContentView items={collectedItems} total={collectedTotal} page={collectedPage} loading={loading} sources={sources} query={collectedQuery} status={collectedStatus} sourceId={collectedSource} startDate={collectedStartDate} endDate={collectedEndDate} selectedIds={selectedCollectedIds} onQuery={setCollectedQuery} onStatus={setCollectedStatus} onSource={setCollectedSource} onStartDate={setCollectedStartDate} onEndDate={setCollectedEndDate} onToggle={(id) => setSelectedCollectedIds((current) => { if (current.includes(id)) return current.filter((value) => value !== id); if (current.length >= 100) { setError('单次最多删除 100 条采集内容'); return current } return [...current, id] })} onTogglePage={() => { const pageIds = collectedItems.map((item) => item.id); const all = pageIds.every((id) => selectedCollectedIds.includes(id)); setSelectedCollectedIds((current) => { if (all) return current.filter((id) => !pageIds.includes(id)); const additions = pageIds.filter((id) => !current.includes(id)); const available = 100 - current.length; if (additions.length > available) setError('单次最多删除 100 条采集内容'); return [...current, ...additions.slice(0, available)] }) }} onApply={() => { const filters = { query: collectedQuery, status: collectedStatus, sourceId: collectedSource, startDate: collectedStartDate, endDate: collectedEndDate }; setAppliedCollectedFilters(filters); setSelectedCollectedIds([]); setCollectedPage(1); void loadCollectedContent(1, filters) }} onReset={() => { const filters = { query: '', status: '', sourceId: '', startDate: '', endDate: '' }; setCollectedQuery(''); setCollectedStatus(''); setCollectedSource(''); setCollectedStartDate(''); setCollectedEndDate(''); setAppliedCollectedFilters(filters); setSelectedCollectedIds([]); setCollectedPage(1); void loadCollectedContent(1, filters) }} onPage={(page) => { setCollectedPage(page); void loadCollectedContent(page, appliedCollectedFilters) }} onDelete={(ids) => Modal.confirm({ title: `删除 ${ids.length} 条采集内容？`, content: '删除后原始采集记录和分析结果均无法恢复。', okText: '确认删除', cancelText: '取消', okButtonProps: { danger: true }, onOk: () => deleteCollectedItems(ids) })} />}
         {tab === 'users' && isAdmin && <UsersView users={users} loading={loading} me={me} onAdd={() => openUser()} onEdit={openUser} onDelete={(user) => Modal.confirm({ title: `删除用户「${user.username}」？`, content: '该用户将立即失去访问权限。', okText: '确认删除', cancelText: '取消', okButtonProps: { danger: true }, onOk: () => removeUser(user) })} />}
         {tab === 'database' && isAdmin && <DatabaseView data={database} loading={loading} />}
+        {tab === 'github' && <GitHubView repos={githubRepos} total={githubRepoTotal} reports={githubReports} loading={githubLoading} discovering={githubDiscovering} statusFilter={githubStatusFilter} report={githubReport} onStatusFilter={changeGithubStatusFilter} onDiscover={() => void runGithubDiscover()} onSetStatus={(id, status) => void setRepoStatus(id, status)} onGenerate={() => void generateDailyReport()} onOpenReport={setGithubReport} onCloseReport={() => setGithubReport(null)} />}
       </section>
       <SourceDrawer open={sourceDrawer} editing={editingSource} form={sourceForm} saving={saving} onClose={() => setSourceDrawer(false)} onSave={saveSource} />
       <UserDrawer open={userDrawer} editing={editingUser} form={userForm} saving={saving} error={error} onClose={() => setUserDrawer(false)} onSave={saveUser} />
@@ -893,3 +1012,76 @@ function ManualContentDrawer({ open, source, form, saving, onClose, onSave }: { 
 
 function Loading({ text }: { text: string }) { return <div className="loading-state"><Spin /><span>{text}</span></div> }
 function Empty({ icon, title }: { icon: React.ReactNode; title: string }) { return <div className="empty-state">{icon}<strong>{title}</strong><span>扫描将在数据抵达后自动呈现结果</span></div> }
+
+const MOMENTUM_TIER_META: Record<string, { label: string; color: string }> = {
+  new_notable: { label: '新兴', color: 'cyan' },
+  fast_mover: { label: '快速攀升', color: 'red' },
+  rising: { label: '上升', color: 'orange' },
+  watch: { label: '观察', color: 'default' },
+}
+
+const REPO_STATUS_META: Record<string, { label: string; color: string }> = {
+  discovered: { label: '候选', color: 'blue' },
+  watched: { label: '已关注', color: 'green' },
+  tracked: { label: '追踪中', color: 'green' },
+  ignored: { label: '已忽略', color: 'default' },
+}
+
+function GitHubView({ repos, total, reports, loading, discovering, statusFilter, report, onStatusFilter, onDiscover, onSetStatus, onGenerate, onOpenReport, onCloseReport }: {
+  repos: GitHubRepo[]
+  total: number
+  reports: GitHubReport[]
+  loading: boolean
+  discovering: boolean
+  statusFilter: string
+  report: GitHubReport | null
+  onStatusFilter: (status: string) => void
+  onDiscover: () => void
+  onSetStatus: (id: number, status: string) => void
+  onGenerate: () => void
+  onOpenReport: (report: GitHubReport) => void
+  onCloseReport: () => void
+}) {
+  const columns: any[] = [
+    { title: '项目', dataIndex: 'full_name', key: 'full_name', render: (value: string, record: GitHubRepo) => <a href={record.html_url} target="_blank" rel="noreferrer">{value}</a> },
+    { title: '语言', dataIndex: 'primary_language', key: 'primary_language', width: 100, render: (value: string | null) => value ? <Tag>{value}</Tag> : '-' },
+    { title: 'Topics', dataIndex: 'topics', key: 'topics', render: (value: string[]) => (value && value.length > 0) ? value.slice(0, 3).map((t) => <Tag key={t} color="blue">{t}</Tag>) : '-' },
+    { title: 'Stars', dataIndex: 'stars', key: 'stars', width: 110, render: (value: number) => value.toLocaleString() },
+    { title: '动量', dataIndex: 'momentum_tier', key: 'momentum_tier', width: 110, render: (value: string | null) => value ? <Tag color={MOMENTUM_TIER_META[value]?.color}>{MOMENTUM_TIER_META[value]?.label ?? value}</Tag> : '-' },
+    { title: '状态', dataIndex: 'status', key: 'status', width: 100, render: (value: string) => <Tag color={REPO_STATUS_META[value]?.color}>{REPO_STATUS_META[value]?.label ?? value}</Tag> },
+    { title: '操作', key: 'actions', width: 170, render: (_: unknown, record: GitHubRepo) => {
+      if (record.status === 'watched' || record.status === 'tracked') return <Button size="small" icon={<StopOutlined />} onClick={() => onSetStatus(record.id, 'ignored')}>忽略</Button>
+      if (record.status === 'ignored') return <Button size="small" icon={<EyeOutlined />} onClick={() => onSetStatus(record.id, 'watched')}>关注</Button>
+      return <><Button size="small" type="primary" icon={<EyeOutlined />} onClick={() => onSetStatus(record.id, 'watched')}>关注</Button><Button size="small" icon={<StopOutlined />} onClick={() => onSetStatus(record.id, 'ignored')} style={{ marginLeft: 8 }}>忽略</Button></>
+    } },
+  ]
+
+  return <div className="github-view">
+    <div className="github-toolbar" style={{ display: 'flex', alignItems: 'center', gap: 12, marginBottom: 16 }}>
+      <Button type="primary" icon={<RocketOutlined />} onClick={onDiscover} loading={discovering}>立即发现候选</Button>
+      <Select value={statusFilter} onChange={onStatusFilter} style={{ width: 140 }} options={[{ value: '', label: '全部状态' }, { value: 'discovered', label: '候选' }, { value: 'watched', label: '已关注' }, { value: 'tracked', label: '追踪中' }, { value: 'ignored', label: '已忽略' }]} />
+      <span className="muted">共 {total} 个项目</span>
+    </div>
+    <Table rowKey="id" columns={columns} dataSource={repos} loading={loading} pagination={{ pageSize: 20 }} size="middle" />
+    <Divider />
+    <div className="github-reports">
+      <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', marginBottom: 12 }}>
+        <Typography.Title level={5} style={{ margin: 0 }}>GitHub 日报</Typography.Title>
+        <Button icon={<FileTextOutlined />} onClick={onGenerate}>生成今日日报</Button>
+      </div>
+      <List
+        dataSource={reports}
+        loading={loading}
+        locale={{ emptyText: '暂无日报，点击「生成今日日报」创建第一份' }}
+        renderItem={(item) => (
+          <List.Item actions={[<Button key="view" size="small" onClick={() => onOpenReport(item)}>查看</Button>]}>
+            <List.Item.Meta title={item.title} description={`${item.items?.length ?? 0} 个项目 · ${new Date(item.generated_at).toLocaleString()}`} />
+          </List.Item>
+        )}
+      />
+    </div>
+    <Modal title={report?.title} open={!!report} footer={null} onCancel={onCloseReport} width={820}>
+      <div style={{ maxHeight: 560, overflow: 'auto', whiteSpace: 'pre-wrap' }}>{report?.body_markdown}</div>
+    </Modal>
+  </div>
+}
