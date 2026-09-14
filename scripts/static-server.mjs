@@ -1,10 +1,9 @@
-import { createServer, request as httpRequest } from 'node:http'
+import { createServer } from 'node:http'
 import { readFile, stat } from 'node:fs/promises'
 import { extname, join, normalize, resolve, sep } from 'node:path'
 
 const root = resolve(process.argv[2] || '.')
 const port = Number(process.argv[3] || process.env.DEPLOY_RUN_PORT || 5000)
-const apiPort = Number(process.env.API_PORT || 8000)
 
 const types = {
   '.html': 'text/html; charset=utf-8',
@@ -26,43 +25,11 @@ const types = {
   '.webmanifest': 'application/manifest+json',
 }
 
-function proxyApi(req, res) {
-  const upstream = httpRequest(
-    {
-      host: '127.0.0.1',
-      port: apiPort,
-      path: req.url,
-      method: req.method,
-      headers: { ...req.headers, host: `127.0.0.1:${apiPort}` },
-    },
-    (up) => {
-      const headers = { ...up.headers }
-      delete headers['transfer-encoding']
-      delete headers.connection
-      delete headers['keep-alive']
-      res.writeHead(up.statusCode || 502, headers)
-      up.pipe(res)
-    },
-  )
-  upstream.on('error', () => {
-    if (!res.headersSent) {
-      res.writeHead(503, { 'Content-Type': 'application/json; charset=utf-8' })
-    }
-    res.end(JSON.stringify({ detail: '后端服务未就绪，请稍后重试' }))
-  })
-  req.pipe(upstream)
-}
-
 createServer(async (req, res) => {
-  const pathname = new URL(req.url, 'http://localhost').pathname
-  if (pathname === '/api' || pathname.startsWith('/api/')) {
-    proxyApi(req, res)
-    return
-  }
   try {
-    let path = decodeURIComponent(pathname)
-    if (path.endsWith('/')) path += 'index.html'
-    const safe = normalize(path).replace(/^([.][.][/\\])+/, '')
+    let pathname = decodeURIComponent(new URL(req.url, 'http://localhost').pathname)
+    if (pathname.endsWith('/')) pathname += 'index.html'
+    const safe = normalize(pathname).replace(/^([.][.][/\\])+/, '')
     const filePath = join(root, safe)
     if (filePath !== root && !filePath.startsWith(root + sep)) {
       res.writeHead(403).end()

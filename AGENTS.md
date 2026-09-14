@@ -19,7 +19,7 @@ AI 测试情报雷达（Signal Atlas / 技术情报雷达）—— 智能测试�
 - 后端：`apps/api` 下 `uv run uvicorn app.main:app`，API 统一前缀 `/api/v1`（含 `/health`）
 - 数据库迁移：`apps/api` 下 `.venv/bin/alembic upgrade head`
 - 预览脚本：`scripts/preview-build.sh` / `scripts/preview-run.sh`
-- 部署脚本：`scripts/deploy-build.sh` / `scripts/deploy-run.sh`（双运行时部署：build 装 pnpm 依赖+构建 dist+用 pip `--target` 装 Python 依赖到 `apps/api/pylibs`；run 阶段先 alembic 迁移+可选 bootstrap admin（env `ATI_ADMIN_USERNAME`/`ATI_ADMIN_PASSWORD`）+ 后台 uvicorn(127.0.0.1:8000) + 零依赖 Node 静态服务器 `scripts/static-server.mjs` 服务 dist 并反代 `/api`→后端，后端不可达时返回 JSON 503）
+- 部署脚本：`scripts/deploy-build.sh` / `scripts/deploy-run.sh`（run 阶段用零依赖 Node 静态服务器 `scripts/static-server.mjs` 服务 `apps/web/dist`，支持 SPA fallback）
 
 ## 运行与预览
 预览型项目（`project_type=web`，`preview_enable=enabled`）。`.coze` 的 `[dev]` 指向 preview-build.sh（装依赖+迁移）+ preview-run.sh（起后端 8000 + 前端 5000）。对外暴露 5000，端口从 `.preview` 读取。生产为 Docker Compose 自托管全栈。
@@ -35,5 +35,3 @@ AI 测试情报雷达（Signal Atlas / 技术情报雷达）—— 智能测试�
 - Vite 端口占用会自动 +1（5001），重启预览前先清理 5000 残留。
 - 预览需同时起后端(8000)与前端(5000)，否则前端 API 请求失败。
 - 部署 run 阶段禁止用 `npx serve` 之类需现场下载的命令：veFaaS 启动超时 30s，`npx serve` 下载包会超时被杀（已改用零依赖 `scripts/static-server.mjs`）。此环境 `fuser -k` 可能杀不掉进程，必要时按 `ss -lptn` 的 pid 直接 kill。
-- 部署站点只起前端时，`/api` 请求会被 SPA fallback 返回 index.html，前端报 `Unexpected token '<'`——部署必须双运行时（`.coze` requires 含 `python-3.12`），run 脚本先起后端再 exec 静态服务器；静态服务器对 `/api/*` 反代，兜底返回 JSON 503 而非 HTML。
-- Python 依赖用 `pip install --target pylibs`（不要用 .venv：venv 的 bin 入口写死 build 环境绝对路径，不可移植；`--target` + `python -m uvicorn`/`python -m alembic` 可移植）。pylibs 与 .venv 并存，预览链路仍用 .venv+uv。
