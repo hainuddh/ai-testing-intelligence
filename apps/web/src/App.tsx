@@ -41,7 +41,7 @@ type Source = {
   trust_level: number
   topics: string[]
 }
-type SourceForm = Omit<Source, 'id' | 'languages' | 'topics'> & { languages: string; topics: string }
+type SourceForm = Omit<Source, 'id' | 'languages' | 'topics'> & { languages: string[]; topics: string }
 type ContentItem = {
   id: number
   source_id: number
@@ -78,7 +78,7 @@ type Endpoint = {
 type EndpointForm = Omit<Endpoint, 'id' | 'source_id' | 'enabled' | 'health_status'>
 type ManualContentForm = { title: string; url: string; summary: string; published_at?: string }
 type SourceDiscovery = { homepage_url: string; feed_url: string; suggested_name: string; samples: { title: string; url: string; summary: string | null; published_at: string | null }[] }
-type SourceDiscoveryForm = { homepage_url: string; name: string; languages: string; trust_level: number; topics: string }
+type SourceDiscoveryForm = { homepage_url: string; name: string; languages: string[]; trust_level: number; topics: string }
 type CollectedItem = {
   id: number
   source_id: number
@@ -104,6 +104,24 @@ const typeLabels: Record<string, string> = { website: '网站', newsletter: '通
 const trustLabels: Record<number, string> = { 5: '最高可信', 4: '高可信', 3: '待验证', 2: '观察中', 1: '低可信' }
 const roleLabels: Record<Role, string> = { viewer: '浏览者', maintainer: '维护者', admin: '管理员' }
 const analysisStatusLabels = { pending: '待分析', analyzed: '已入雷达', filtered: '已过滤', failed: '分析失败' }
+const languageOptions = [
+  { value: 'zh-CN', label: '中文（简体）' },
+  { value: 'zh-TW', label: '中文（繁体）' },
+  { value: 'en', label: '英语' },
+  { value: 'ja', label: '日语' },
+  { value: 'ko', label: '韩语' },
+  { value: 'de', label: '德语' },
+  { value: 'fr', label: '法语' },
+  { value: 'es', label: '西班牙语' },
+  { value: 'pt', label: '葡萄牙语' },
+  { value: 'it', label: '意大利语' },
+  { value: 'ru', label: '俄语' },
+  { value: 'ar', label: '阿拉伯语' },
+  { value: 'hi', label: '印地语' },
+  { value: 'id', label: '印尼语' },
+  { value: 'vi', label: '越南语' },
+  { value: 'th', label: '泰语' },
+]
 const splitValues = (value: string) => value.split(/[,，]/).map((item) => item.trim()).filter(Boolean)
 const list = <T,>(data: T[] | { items: T[] }) => Array.isArray(data) ? data : data.items
 const dateText = (value: string | null) => value ? new Intl.DateTimeFormat('zh-CN', { dateStyle: 'medium' }).format(new Date(value)) : '时间未知'
@@ -426,14 +444,14 @@ export default function App() {
   const openSource = (source?: Source) => {
     setEditingSource(source ?? null)
     sourceForm.resetFields()
-    sourceForm.setFieldsValue(source ? { ...source, languages: source.languages.join(', '), topics: source.topics.join(', ') } : { trust_level: 3 })
+    sourceForm.setFieldsValue(source ? { ...source, languages: source.languages, topics: source.topics.join(', ') } : { trust_level: 3 })
     setSourceDrawer(true)
   }
 
   const openDiscovery = () => {
     setDiscovery(null)
     discoveryForm.resetFields()
-    discoveryForm.setFieldsValue({ languages: 'en', trust_level: 3, topics: '' })
+    discoveryForm.setFieldsValue({ languages: ['en'], trust_level: 3, topics: '' })
     setDiscoveryDrawer(true)
   }
 
@@ -463,7 +481,7 @@ export default function App() {
       await request('/api/v1/sources/discover/install', {
         method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({
           homepage_url: discovery.homepage_url, feed_url: discovery.feed_url, name: values.name,
-          languages: splitValues(values.languages), trust_level: values.trust_level, topics: splitValues(values.topics),
+          languages: values.languages, trust_level: values.trust_level, topics: splitValues(values.topics),
         }),
       })
       setDiscoveryDrawer(false)
@@ -479,7 +497,7 @@ export default function App() {
     setSaving(true)
     setError('')
     try {
-      const payload = { ...values, languages: splitValues(values.languages), topics: splitValues(values.topics) }
+      const payload = { ...values, topics: splitValues(values.topics) }
       const path = editingSource ? `/api/v1/sources/${editingSource.id}` : '/api/v1/sources'
       await request<Source>(path, {
         method: editingSource ? 'PATCH' : 'POST',
@@ -746,7 +764,7 @@ function SourceDiscoveryDrawer({ open, discovery, form, saving, onClose, onDisco
         <div className="discovery-result"><span>已验证订阅地址</span><a href={discovery.feed_url} target="_blank" rel="noreferrer">{discovery.feed_url}</a></div>
         <div className="discovery-samples">{discovery.samples.map((item) => <article key={item.url}><strong>{item.title}</strong><small>{dateText(item.published_at)}</small><p>{item.summary || '该条目未提供摘要'}</p></article>)}</div>
         <Form.Item label="信源名称" name="name" rules={[{ required: true, message: '请输入信源名称' }]}><Input /></Form.Item>
-        <div className="form-pair"><Form.Item label="语言" name="languages" rules={[{ required: true, message: '请输入语言' }]}><Input placeholder="zh-CN, en" /></Form.Item><Form.Item label="可信等级" name="trust_level" rules={[{ required: true }]}><Select options={Object.entries(trustLabels).map(([value, label]) => ({ value: Number(value), label }))} /></Form.Item></div>
+        <div className="form-pair"><Form.Item label="语言" name="languages" rules={[{ required: true, message: '请选择语言' }]}><Select mode="multiple" placeholder="请选择语言" options={languageOptions} optionFilterProp="label" /></Form.Item><Form.Item label="可信等级" name="trust_level" rules={[{ required: true }]}><Select options={Object.entries(trustLabels).map(([value, label]) => ({ value: Number(value), label }))} /></Form.Item></div>
         <Form.Item label="关注主题" name="topics" extra="多个值用逗号分隔"><Input placeholder="AI Agent, testing" /></Form.Item>
         <Button htmlType="submit" type="primary" size="large" block loading={saving}>确认并启用监听</Button>
       </>}
@@ -824,7 +842,7 @@ function SourceDrawer({ open, editing, form, saving, onClose, onSave }: { open: 
       <div className="form-pair"><Form.Item label="信源类型" name="source_type" rules={[{ required: true, message: '请选择类型' }]}><Select options={Object.entries(typeLabels).map(([value, label]) => ({ value, label }))} /></Form.Item><Form.Item label="可信等级" name="trust_level" rules={[{ required: true, message: '请选择可信度' }]}><Select options={Object.entries(trustLabels).map(([value, label]) => ({ value: Number(value), label }))} /></Form.Item></div>
       <Form.Item label="主页地址" name="homepage_url" rules={[{ type: 'url', message: '请输入有效地址' }]}><Input placeholder="https://" /></Form.Item>
       <Form.Item label="描述" name="description"><Input.TextArea rows={3} /></Form.Item>
-      <Form.Item label="语言" name="languages" rules={[{ required: true, message: '请输入语言' }]} extra="多个值用逗号分隔"><Input placeholder="zh-CN, en" /></Form.Item>
+      <Form.Item label="语言" name="languages" rules={[{ required: true, message: '请选择语言' }]}><Select mode="multiple" placeholder="请选择语言" options={languageOptions} optionFilterProp="label" /></Form.Item>
       <Form.Item label="关注主题" name="topics" rules={[{ required: true, message: '请输入主题' }]} extra="多个值用逗号分隔"><Input placeholder="AI Agent, foundation-models" /></Form.Item>
       <Button htmlType="submit" type="primary" size="large" block loading={saving}>{editing ? '保存修改' : '建立监听'}</Button>
     </Form>

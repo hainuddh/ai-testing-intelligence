@@ -159,7 +159,8 @@ describe('management radar workflow', () => {
     await user.click(await screen.findByText('最高可信'))
     await user.type(screen.getByLabelText('主页地址'), source.homepage_url)
     await user.type(screen.getByLabelText('描述'), source.description)
-    await user.type(screen.getByLabelText('语言'), 'en')
+    await user.click(screen.getByLabelText('语言'))
+    await user.click(await screen.findByText('英语'))
     await user.type(screen.getByLabelText('关注主题'), 'foundation-models')
     await user.click(screen.getByRole('button', { name: '建立监听' }))
 
