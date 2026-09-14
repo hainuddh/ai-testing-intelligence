@@ -1,7 +1,17 @@
 import hashlib
 from datetime import UTC, datetime
 
-from sqlalchemy import JSON, Boolean, DateTime, ForeignKey, Integer, String, Text
+from sqlalchemy import (
+    JSON,
+    Boolean,
+    DateTime,
+    Float,
+    ForeignKey,
+    Integer,
+    String,
+    Text,
+    UniqueConstraint,
+)
 from sqlalchemy.orm import Mapped, mapped_column, relationship
 
 from app.database import Base
@@ -133,3 +143,89 @@ class FetchRun(Base):
     completed_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
 
     endpoint: Mapped[SourceEndpoint] = relationship(back_populates="fetch_runs")
+
+
+class GitHubRepo(Base):
+    __tablename__ = "github_repos"
+
+    id: Mapped[int] = mapped_column(primary_key=True)
+    full_name: Mapped[str] = mapped_column(String(255), unique=True, index=True)
+    description: Mapped[str | None] = mapped_column(Text, nullable=True)
+    html_url: Mapped[str] = mapped_column(String(2048))
+    primary_language: Mapped[str | None] = mapped_column(String(50), nullable=True, index=True)
+    topics: Mapped[list[str]] = mapped_column(JSON, default=list)
+    homepage: Mapped[str | None] = mapped_column(String(2048), nullable=True)
+    license_name: Mapped[str | None] = mapped_column(String(100), nullable=True)
+    archived: Mapped[bool] = mapped_column(Boolean, default=False)
+    stars: Mapped[int] = mapped_column(Integer, default=0, index=True)
+    forks: Mapped[int] = mapped_column(Integer, default=0)
+    open_issues: Mapped[int] = mapped_column(Integer, default=0)
+    watchers: Mapped[int] = mapped_column(Integer, default=0)
+    repo_created_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
+    repo_pushed_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
+    status: Mapped[str] = mapped_column(String(30), default="discovered", index=True)
+    momentum_score: Mapped[float | None] = mapped_column(Float, nullable=True, index=True)
+    momentum_tier: Mapped[str | None] = mapped_column(String(30), nullable=True, index=True)
+    summary: Mapped[str | None] = mapped_column(Text, nullable=True)
+    summary_status: Mapped[str] = mapped_column(String(30), default="none", index=True)
+    first_seen_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utc_now)
+    last_seen_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), default=utc_now, onupdate=utc_now
+    )
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utc_now)
+
+    snapshots: Mapped[list["GitHubSnapshot"]] = relationship(
+        back_populates="repo", cascade="all, delete-orphan"
+    )
+
+
+class GitHubSnapshot(Base):
+    __tablename__ = "github_snapshots"
+    __table_args__ = (UniqueConstraint("repo_id", "snapshot_at", name="uq_repo_snapshot_at"),)
+
+    id: Mapped[int] = mapped_column(primary_key=True)
+    repo_id: Mapped[int] = mapped_column(ForeignKey("github_repos.id"), index=True)
+    snapshot_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utc_now, index=True)
+    stars: Mapped[int] = mapped_column(Integer, default=0)
+    forks: Mapped[int] = mapped_column(Integer, default=0)
+    open_issues: Mapped[int] = mapped_column(Integer, default=0)
+    watchers: Mapped[int] = mapped_column(Integer, default=0)
+    star_delta_24h: Mapped[int | None] = mapped_column(Integer, nullable=True)
+    star_delta_7d: Mapped[int | None] = mapped_column(Integer, nullable=True)
+
+    repo: Mapped[GitHubRepo] = relationship(back_populates="snapshots")
+
+
+class GitHubReport(Base):
+    __tablename__ = "github_reports"
+
+    id: Mapped[int] = mapped_column(primary_key=True)
+    report_type: Mapped[str] = mapped_column(String(30), default="daily", index=True)
+    period_start: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
+    period_end: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
+    title: Mapped[str] = mapped_column(String(200))
+    body_markdown: Mapped[str | None] = mapped_column(Text, nullable=True)
+    status: Mapped[str] = mapped_column(String(30), default="draft", index=True)
+    generated_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), default=utc_now, index=True
+    )
+
+    items: Mapped[list["GitHubReportItem"]] = relationship(
+        back_populates="report", cascade="all, delete-orphan"
+    )
+
+
+class GitHubReportItem(Base):
+    __tablename__ = "github_report_items"
+
+    id: Mapped[int] = mapped_column(primary_key=True)
+    report_id: Mapped[int] = mapped_column(ForeignKey("github_reports.id"), index=True)
+    repo_id: Mapped[int] = mapped_column(ForeignKey("github_repos.id"), index=True)
+    rank: Mapped[int] = mapped_column(Integer, default=0)
+    momentum_score: Mapped[float | None] = mapped_column(Float, nullable=True)
+    momentum_tier: Mapped[str | None] = mapped_column(String(30), nullable=True)
+    highlight: Mapped[str | None] = mapped_column(Text, nullable=True)
+    star_delta_24h: Mapped[int | None] = mapped_column(Integer, nullable=True)
+    star_delta_7d: Mapped[int | None] = mapped_column(Integer, nullable=True)
+
+    report: Mapped[GitHubReport] = relationship(back_populates="items")

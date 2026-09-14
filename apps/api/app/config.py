@@ -12,6 +12,8 @@ class Settings(BaseSettings):
     worker_poll_seconds: int = 60
     fetch_timeout_seconds: int = 20
     fetch_max_bytes: int = 5_000_000
+    github_token: str = ""  # 预留：MVP 不接 PAT，非空时客户端自动带 Bearer
+    github_discovery_languages: str = "python,typescript,go,rust,javascript"
     analysis_api_base_url: str = ""
     analysis_api_key: str = ""
     analysis_model: str = ""
@@ -24,6 +26,10 @@ class Settings(BaseSettings):
     sources_cache_ttl: int = 30
     db_pool_size: int = 3
     db_max_overflow: int = 3
+
+    @property
+    def github_discovery_languages_list(self) -> list[str]:
+        return [x.strip() for x in self.github_discovery_languages.split(",") if x.strip()]
 
     model_config = SettingsConfigDict(env_file=".env", env_prefix="ATI_", extra="ignore")
 

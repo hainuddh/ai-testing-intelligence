@@ -100,9 +100,9 @@ GitHub Search /               (元数据)      (时间序列)      Score        
 
 每步遵循 TDD：先补 pytest（后端）用例，再写实现，跑通全部测试才交付。
 
-## 十二、待确认的决策点
+## 十二、已确认的决策（定稿 2026-09）
 
-1. **GitHub 鉴权**：是否接入 Personal Access Token（提升 API 配额 + 解锁 topic/search 字段）？无 token 公开配额 60 req/h，MVP 小规模够用，规模化需 token。
-2. **发现 vs 订阅**：追踪来源是「系统自动发现候选 + 用户确认」，还是「用户手动添加 repo」？建议两者并存，默认先做「手动添加 + Trending 候选导入」。
-3. **报告送达**：MVP 是否只做站内 + Markdown 导出（复用现有），推送延后？
-4. **分析深度**：每个 repo 是否都要 LLM 深度分析，还是「确定性动量打分 + 轻量 LLM 摘要」先行（控制 token 成本）？
+1. **GitHub 鉴权**：MVP 暂不接 Personal Access Token，以无 token 直连公开 Search/Core API；但**预留**——`Settings` 增加 `github_token` 配置项（`ATI_GITHUB_TOKEN`），采集客户端预留 `Authorization: Bearer` 注入逻辑（token 为空不带、非空则带），后续切换免改业务代码。
+2. **发现 vs 订阅**：采用「系统自动发现候选（零配置）+ 一键关注/忽略」，无需用户手动添加 repo（见 `github-auto-discovery-plan.md`）。
+3. **报告送达**：MVP 只做站内展示 + Markdown 导出（复用现有 content 导出能力），推送（邮件/IM）**延后**，不实现。
+4. **分析深度**：MVP 只做「确定性动量打分（免费，不调 LLM）+ 轻量 LLM 摘要（高置信候选批量一次）」；场景/组合/建议/风险等深度分析延后到 Phase 2。
