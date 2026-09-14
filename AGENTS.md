@@ -19,7 +19,7 @@ AI 测试情报雷达（Signal Atlas / 技术情报雷达）—— 智能测试�
 - 后端：`apps/api` 下 `uv run uvicorn app.main:app`，API 统一前缀 `/api/v1`（含 `/health`）
 - 数据库迁移：`apps/api` 下 `.venv/bin/alembic upgrade head`
 - 预览脚本：`scripts/preview-build.sh` / `scripts/preview-run.sh`
-- 部署脚本：`scripts/deploy-build.sh` / `scripts/deploy-run.sh`
+- 部署脚本：`scripts/deploy-build.sh` / `scripts/deploy-run.sh`（run 阶段用零依赖 Node 静态服务器 `scripts/static-server.mjs` 服务 `apps/web/dist`，支持 SPA fallback）
 
 ## 运行与预览
 预览型项目（`project_type=web`，`preview_enable=enabled`）。`.coze` 的 `[dev]` 指向 preview-build.sh（装依赖+迁移）+ preview-run.sh（起后端 8000 + 前端 5000）。对外暴露 5000，端口从 `.preview` 读取。生产为 Docker Compose 自托管全栈。
@@ -34,3 +34,4 @@ AI 测试情报雷达（Signal Atlas / 技术情报雷达）—— 智能测试�
 - 后端第一次跑：先 `uv venv` + `alembic upgrade head`，否则 API 启动后查询报表找不到表。
 - Vite 端口占用会自动 +1（5001），重启预览前先清理 5000 残留。
 - 预览需同时起后端(8000)与前端(5000)，否则前端 API 请求失败。
+- 部署 run 阶段禁止用 `npx serve` 之类需现场下载的命令：veFaaS 启动超时 30s，`npx serve` 下载包会超时被杀（已改用零依赖 `scripts/static-server.mjs`）。此环境 `fuser -k` 可能杀不掉进程，必要时按 `ss -lptn` 的 pid 直接 kill。

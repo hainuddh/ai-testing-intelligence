@@ -3,8 +3,13 @@ set -euo pipefail
 
 SCRIPT_DIR="$(cd "$(dirname "$0")" && pwd)"
 PROJECT_DIR="$(cd "$SCRIPT_DIR/.." && pwd)"
-cd "$PROJECT_DIR/apps/web"
 
+DIST_DIR="$PROJECT_DIR/apps/web/dist"
 PORT="${DEPLOY_RUN_PORT:-5000}"
 
-exec npx serve dist -l "$PORT"
+if [ ! -f "$DIST_DIR/index.html" ]; then
+  echo "ERROR: $DIST_DIR/index.html not found. Run deploy-build.sh first." >&2
+  exit 1
+fi
+
+exec node "$SCRIPT_DIR/static-server.mjs" "$DIST_DIR" "$PORT"
