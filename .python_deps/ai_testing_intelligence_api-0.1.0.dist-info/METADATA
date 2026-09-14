@@ -1,0 +1,19 @@
+Metadata-Version: 2.4
+Name: ai-testing-intelligence-api
+Version: 0.1.0
+Requires-Python: >=3.11
+Requires-Dist: alembic==1.19.1
+Requires-Dist: fastapi==0.141.1
+Requires-Dist: httpx==0.28.1
+Requires-Dist: pydantic-settings==2.15.0
+Requires-Dist: psycopg[binary]==3.3.4
+Requires-Dist: PyJWT==2.13.0
+Requires-Dist: pwdlib[argon2]==0.3.1
+Requires-Dist: sqlalchemy==2.0.52
+Requires-Dist: uvicorn[standard]==0.52.4
+Requires-Dist: redis==5.3.1
+Requires-Dist: aiosqlite==0.22.1
+Provides-Extra: dev
+Requires-Dist: pytest==8.4.2; extra == "dev"
+Requires-Dist: pytest-cov==6.3.0; extra == "dev"
+Requires-Dist: ruff==0.16.4; extra == "dev"
