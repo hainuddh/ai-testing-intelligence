@@ -29,6 +29,7 @@ AI 测试情报雷达（Signal Atlas / 技术情报雷达）—— 智能测试�
 - 后端依赖安装用阿里云 PyPI 镜像（`--index-url https://mirrors.aliyun.com/pypi/simple/`），否则下载极慢。
 - 不修改已创建的 `sub_id`（d6048ed2）。
 - **记账界定（长期约定）**：为在 coze 沙箱环境预览/部署而做的改动（`.coze`、`.preview`、`.gitignore`、`scripts/*`、`AGENTS.md` 中部署/预览相关内容）**不计入"代码修改"**；后续核对/统计代码变更量时予以排除。业务代码仅指 `apps/web/src/**`、`apps/api/app/**`、`apps/api/migrations/**`、`docs/**` 等产品源码与文档。此项仅作记账口径，不做任何 git 回滚/移除跟踪动作。
+- **TDD 开发模式（长期约束）**：所有开发遵循 TDD——先写失败测试（Red）→ 写最小实现使其通过（Green）→ 重构（Refactor）。前端用 vitest（`apps/web` 下 `pnpm exec vitest`，用例在 `apps/web/src/App.test.tsx`）；后端用 pytest（`apps/api` 下 `.venv/bin/pytest`，用例在 `apps/api/tests/`）。任何功能改动需先补写/调整对应测试用例，再写实现，最后跑测试确认全部通过才能视为完成。
 
 ## 常见问题和预防
 - 前端无 node_modules：先 `pnpm install`（根目录 `package-lock.json` 存在，用 pnpm 会生成 pnpm-lock）。
