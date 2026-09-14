@@ -4,6 +4,7 @@ name = "ai-testing-intelligence"
 requires = ["nodejs-24"]
 project_type = "web"
 version = "0.0.35"
+entrypoint = "apps/web/index.html"
 
 [preview]
 preview_enable = "enabled"
@@ -11,6 +12,14 @@ preview_enable = "enabled"
 [dev]
 build = ["bash", "scripts/preview-build.sh"]
 run = ["bash", "scripts/preview-run.sh"]
+
+[deploy]
+build = ["bash", "scripts/deploy-build.sh"]
+run = ["bash", "scripts/deploy-run.sh"]
+
+[deploy.profile]
+kind = "service"
+flavor = "web"
 
 [subprojects]
 path = ["."]

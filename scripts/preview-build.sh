@@ -3,6 +3,7 @@ set -euo pipefail
 
 SCRIPT_DIR="$(cd "$(dirname "$0")" && pwd)"
 PROJECT_DIR="$(cd "$SCRIPT_DIR/.." && pwd)"
+export PATH="$HOME/.local/bin:$PATH"
 cd "$PROJECT_DIR"
 
 # 后端 Python 依赖
