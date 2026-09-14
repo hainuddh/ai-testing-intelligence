@@ -28,6 +28,15 @@ const types = {
 createServer(async (req, res) => {
   try {
     let pathname = decodeURIComponent(new URL(req.url, 'http://localhost').pathname)
+    if (pathname.startsWith('/api/')) {
+      res.writeHead(502, { 'Content-Type': 'application/json; charset=utf-8' }).end(
+        JSON.stringify({
+          detail:
+            'Backend API is not part of this deployment (static frontend only). Run the full stack via Docker Compose or use the preview environment.',
+        }),
+      )
+      return
+    }
     if (pathname.endsWith('/')) pathname += 'index.html'
     const safe = normalize(pathname).replace(/^([.][.][/\\])+/, '')
     const filePath = join(root, safe)
