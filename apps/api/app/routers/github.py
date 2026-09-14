@@ -1,13 +1,21 @@
 from fastapi import APIRouter, HTTPException, Query
-from sqlalchemy import func, select
+from sqlalchemy import Text, cast, func, select
 
 from app.config import settings
 from app.dependencies import CurrentUser, DbSession, MaintainerUser
-from app.github_service import discover_candidates, generate_daily_report, set_repo_status
+from app.github_service import (
+    discover_candidates,
+    generate_daily_report,
+    get_topics,
+    set_repo_status,
+    set_topics,
+)
 from app.models import GitHubRepo, GitHubReport
 from app.schemas import (
     GitHubDiscoverRequest,
     GitHubDiscoverResponse,
+    GitHubPreferenceResponse,
+    GitHubPreferenceUpdate,
     GitHubRepoListResponse,
     GitHubRepoResponse,
     GitHubRepoStatusUpdate,
@@ -25,8 +33,26 @@ def discover(
     _user: MaintainerUser,
 ) -> GitHubDiscoverResponse:
     languages = payload.languages or settings.github_discovery_languages_list
-    count = discover_candidates(db, languages)
+    topics = payload.topics or get_topics(db)
+    count = discover_candidates(db, languages, topics=topics)
     return GitHubDiscoverResponse(discovered=count)
+
+
+@router.get("/preferences", response_model=GitHubPreferenceResponse)
+def get_preferences(
+    db: DbSession,
+    _user: CurrentUser,
+) -> GitHubPreferenceResponse:
+    return GitHubPreferenceResponse(topics=get_topics(db))
+
+
+@router.put("/preferences", response_model=GitHubPreferenceResponse)
+def update_preferences(
+    payload: GitHubPreferenceUpdate,
+    db: DbSession,
+    _user: MaintainerUser,
+) -> GitHubPreferenceResponse:
+    return GitHubPreferenceResponse(topics=set_topics(db, payload.topics))
 
 
 @router.get("/repos", response_model=GitHubRepoListResponse)
@@ -34,6 +60,7 @@ def list_repos(
     db: DbSession,
     _user: CurrentUser,
     status_filter: str | None = Query(default=None, alias="status"),
+    topic_filter: str | None = Query(default=None, alias="topic"),
     offset: int = Query(default=0, ge=0),
     limit: int = Query(default=50, ge=1, le=200),
 ) -> GitHubRepoListResponse:
@@ -42,6 +69,11 @@ def list_repos(
         stmt = stmt.where(GitHubRepo.status == status_filter)
     else:
         stmt = stmt.where(GitHubRepo.status != "ignored")
+    if topic_filter:
+        escaped = (
+            topic_filter.replace("\\", "\\\\").replace("%", "\\%").replace("_", "\\_").replace('"', "")
+        )
+        stmt = stmt.where(GitHubRepo.topics.cast(Text).like(f'%"{escaped}"%', escape="\\"))
     total = db.scalar(select(func.count()).select_from(stmt.subquery())) or 0
     items = db.scalars(
         stmt.order_by(GitHubRepo.momentum_score.desc(), GitHubRepo.stars.desc())

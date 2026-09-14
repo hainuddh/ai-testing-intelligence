@@ -129,3 +129,37 @@ def test_generate_and_list_report(client, db_session):
     data = list_resp.json()
     assert data["total"] >= 1
     assert data["items"][0]["items"][0]["repo_id"] == repo.id
+
+
+def test_get_and_put_github_preferences(client, db_session):
+    headers = auth_headers(db_session)
+
+    empty = client.get("/api/v1/github/preferences", headers=headers)
+    assert empty.status_code == 200
+    assert empty.json()["topics"] == []
+
+    put = client.put(
+        "/api/v1/github/preferences", json={"topics": ["ai", "rag", "ai"]}, headers=headers
+    )
+    assert put.status_code == 200
+    assert put.json()["topics"] == ["ai", "rag"]
+
+    fetched = client.get("/api/v1/github/preferences", headers=headers)
+    assert fetched.json()["topics"] == ["ai", "rag"]
+
+
+def test_list_repos_filters_by_topic(client, db_session):
+    headers = auth_headers(db_session)
+    db_session.add_all(
+        [
+            GitHubRepo(full_name="a/ai", html_url="https://github.com/a/ai", stars=10, topics=["ai", "agents"]),
+            GitHubRepo(full_name="b/web", html_url="https://github.com/b/web", stars=20, topics=["web"]),
+        ]
+    )
+    db_session.commit()
+
+    resp = client.get("/api/v1/github/repos?topic=ai", headers=headers)
+    assert resp.status_code == 200
+    data = resp.json()
+    assert data["total"] == 1
+    assert data["items"][0]["full_name"] == "a/ai"

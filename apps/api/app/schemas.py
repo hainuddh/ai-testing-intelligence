@@ -269,10 +269,19 @@ class GitHubRepoListResponse(BaseModel):
 
 class GitHubDiscoverRequest(BaseModel):
     languages: list[str] = Field(default_factory=list)
+    topics: list[str] = Field(default_factory=list)
 
 
 class GitHubDiscoverResponse(BaseModel):
     discovered: int
+
+
+class GitHubPreferenceResponse(BaseModel):
+    topics: list[str]
+
+
+class GitHubPreferenceUpdate(BaseModel):
+    topics: list[str] = Field(default_factory=list)
 
 
 class GitHubRepoStatusUpdate(BaseModel):

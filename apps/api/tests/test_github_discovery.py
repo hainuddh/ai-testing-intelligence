@@ -2,6 +2,7 @@ from datetime import UTC, datetime, timedelta
 
 from app.github_discovery import (
     build_discovery_queries,
+    build_topic_queries,
     estimate_star_deltas,
     repo_from_search_item,
     score_candidate,
@@ -76,3 +77,26 @@ def test_score_candidate_delegates_to_momentum():
     now = datetime(2026, 1, 8, tzinfo=UTC)
     m = score_candidate(1000, star_delta_24h=30, star_delta_7d=150, pushed_at=None, now=now)
     assert m.tier == "new_notable"
+
+
+def test_build_topic_queries_emits_topic_and_keyword():
+    assert build_topic_queries(["ai", "rag"]) == [
+        "topic:ai stars:>=20",
+        "ai in:name,description,topics stars:>=20",
+        "topic:rag stars:>=20",
+        "rag in:name,description,topics stars:>=20",
+    ]
+
+
+def test_build_topic_queries_custom_min():
+    assert build_topic_queries(["testing"], stars_min=100) == [
+        "topic:testing stars:>=100",
+        "testing in:name,description,topics stars:>=100",
+    ]
+
+
+def test_build_topic_queries_skips_blank():
+    assert build_topic_queries(["", "  ", "ai"]) == [
+        "topic:ai stars:>=20",
+        "ai in:name,description,topics stars:>=20",
+    ]

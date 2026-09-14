@@ -8,15 +8,17 @@ import httpx
 from sqlalchemy import func, select
 from sqlalchemy.orm import Session
 
+from app.github_analysis import analyze_repo_intel
 from app.github_client import search_repositories
 from app.github_discovery import (
     build_discovery_queries,
+    build_topic_queries,
     estimate_star_deltas,
     repo_from_search_item,
     score_candidate,
 )
 from app.github_momentum import Momentum
-from app.models import GitHubRepo, GitHubReport, GitHubReportItem
+from app.models import GitHubPreference, GitHubRepo, GitHubReport, GitHubReportItem
 
 
 def upsert_repo(db: Session, repo, momentum: Momentum, *, now: datetime) -> GitHubRepo:
@@ -50,13 +52,22 @@ def discover_candidates(
     *,
     stars_min: int = 20,
     per_language: int = 30,
+    topics: list[str] | None = None,
     client: httpx.Client | None = None,
     now: datetime | None = None,
 ) -> int:
-    """通过 GitHub Search API 自动发现候选并 upsert，返回处理的候选数量。"""
+    """通过 GitHub Search API 自动发现候选并 upsert，返回处理的候选数量。
+
+    配置了关注主题时按主题（topic 精确 + 关键词模糊）发现；否则退回按语言发现。
+    """
     now = now or datetime.now(UTC)
+    queries = (
+        build_topic_queries(topics, stars_min)
+        if topics
+        else build_discovery_queries(languages, stars_min)
+    )
     count = 0
-    for query in build_discovery_queries(languages, stars_min):
+    for query in queries:
         try:
             payload = search_repositories(query, client=client, per_page=per_language)
         except httpx.HTTPError:
@@ -70,6 +81,34 @@ def discover_candidates(
             count += 1
     db.commit()
     return count
+
+
+def _normalize_topics(topics: list[str]) -> list[str]:
+    seen: set[str] = set()
+    result: list[str] = []
+    for topic in topics:
+        term = (topic or "").strip()
+        if term and term not in seen:
+            seen.add(term)
+            result.append(term)
+    return result
+
+
+def get_topics(db: Session) -> list[str]:
+    pref = db.scalar(select(GitHubPreference).limit(1))
+    return list(pref.topics) if pref else []
+
+
+def set_topics(db: Session, topics: list[str]) -> list[str]:
+    cleaned = _normalize_topics(topics)
+    pref = db.scalar(select(GitHubPreference).limit(1))
+    if pref is None:
+        pref = GitHubPreference(topics=cleaned)
+        db.add(pref)
+    else:
+        pref.topics = cleaned
+    db.commit()
+    return cleaned
 
 
 def set_repo_status(db: Session, repo_id: int, status: str) -> GitHubRepo | None:
@@ -94,22 +133,70 @@ def discovery_due(
     return now - latest >= timedelta(hours=interval_hours)
 
 
+def ensure_repo_intel(
+    db: Session, repo: GitHubRepo, *, client: httpx.Client | None = None
+) -> bool:
+    """确保仓库已有深度情报分析：已分析则复用，未配置或失败则降级跳过。"""
+    if repo.intel_status == "analyzed" and repo.intel_summary:
+        return True
+    try:
+        intel = analyze_repo_intel(
+            repo.full_name,
+            repo.description,
+            repo.primary_language,
+            repo.topics or [],
+            repo.stars,
+            repo.homepage,
+            repo.html_url,
+            client=client,
+        )
+    except Exception:
+        repo.intel_status = "failed"
+        return False
+    repo.intel_summary = intel.summary
+    repo.testing_value_analysis = intel.testing_value_analysis
+    repo.applicable_scenarios = intel.applicable_scenarios
+    repo.adoption_suggestions = intel.adoption_suggestions
+    repo.testing_value_score = intel.testing_value_score
+    repo.intel_status = "analyzed"
+    return True
+
+
 def render_daily_markdown(title: str, repos: list[GitHubRepo]) -> str:
     lines = [f"# {title}", ""]
     for repo in repos:
         tier = repo.momentum_tier or "watch"
         language = repo.primary_language or "-"
         lines.append(f"## {repo.full_name}")
-        lines.append(f"- 星数 {repo.stars} · 语言 {language} · 档位 {tier}")
-        summary = repo.summary or repo.description or ""
+        meta = [f"星数 {repo.stars}", f"语言 {language}", f"档位 {tier}"]
+        if repo.testing_value_score is not None:
+            meta.append(f"测试价值 {repo.testing_value_score}/100")
+        lines.append("- " + " · ".join(meta))
+        lines.append(f"- 仓库地址：{repo.html_url}")
+
+        summary = repo.intel_summary or repo.summary or repo.description or ""
         if summary:
-            lines.append(f"- {summary}")
+            lines.extend(["", "**项目摘要**", summary])
+        if repo.testing_value_analysis:
+            lines.extend(["", "**测试价值分析**", repo.testing_value_analysis])
+        if repo.applicable_scenarios:
+            lines.append("")
+            lines.append("**应用场景推荐**")
+            lines.extend(f"- {s}" for s in repo.applicable_scenarios)
+        if repo.adoption_suggestions:
+            lines.append("")
+            lines.append("**落地建议**")
+            lines.extend(f"- {s}" for s in repo.adoption_suggestions)
         lines.append("")
     return "\n".join(lines).rstrip() + "\n"
 
 
 def generate_daily_report(
-    db: Session, *, now: datetime | None = None, top_n: int = 20
+    db: Session,
+    *,
+    now: datetime | None = None,
+    top_n: int = 20,
+    client: httpx.Client | None = None,
 ) -> GitHubReport:
     now = now or datetime.now(UTC)
     repos = list(
@@ -120,6 +207,9 @@ def generate_daily_report(
             .limit(top_n)
         ).all()
     )
+
+    for repo in repos:
+        ensure_repo_intel(db, repo, client=client)
 
     report = GitHubReport(
         report_type="daily",

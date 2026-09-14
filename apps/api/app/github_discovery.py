@@ -34,6 +34,25 @@ def build_discovery_queries(languages: list[str], stars_min: int = 20) -> list[s
     return [f"language:{lang} stars:>={stars_min}" for lang in languages]
 
 
+def _quote_term(term: str) -> str:
+    term = term.strip()
+    if " " in term:
+        return f'"{term}"'
+    return term
+
+
+def build_topic_queries(topics: list[str], stars_min: int = 20) -> list[str]:
+    """为每个关注主题生成两条查询：官方 topic 精确匹配 + 名称/描述/topics 模糊匹配。"""
+    queries: list[str] = []
+    for topic in topics:
+        term = _quote_term(topic)
+        if not term:
+            continue
+        queries.append(f"topic:{term} stars:>={stars_min}")
+        queries.append(f"{term} in:name,description,topics stars:>={stars_min}")
+    return queries
+
+
 def _parse_dt(value: str | None) -> datetime | None:
     if not value:
         return None

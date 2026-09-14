@@ -168,6 +168,12 @@ class GitHubRepo(Base):
     momentum_tier: Mapped[str | None] = mapped_column(String(30), nullable=True, index=True)
     summary: Mapped[str | None] = mapped_column(Text, nullable=True)
     summary_status: Mapped[str] = mapped_column(String(30), default="none", index=True)
+    intel_summary: Mapped[str | None] = mapped_column(Text, nullable=True)
+    testing_value_analysis: Mapped[str | None] = mapped_column(Text, nullable=True)
+    applicable_scenarios: Mapped[list[str]] = mapped_column(JSON, default=list)
+    adoption_suggestions: Mapped[list[str]] = mapped_column(JSON, default=list)
+    testing_value_score: Mapped[int | None] = mapped_column(Integer, nullable=True, index=True)
+    intel_status: Mapped[str] = mapped_column(String(30), default="none", index=True)
     first_seen_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utc_now)
     last_seen_at: Mapped[datetime] = mapped_column(
         DateTime(timezone=True), default=utc_now, onupdate=utc_now
@@ -229,3 +235,13 @@ class GitHubReportItem(Base):
     star_delta_7d: Mapped[int | None] = mapped_column(Integer, nullable=True)
 
     report: Mapped[GitHubReport] = relationship(back_populates="items")
+
+
+class GitHubPreference(Base):
+    __tablename__ = "github_preferences"
+
+    id: Mapped[int] = mapped_column(primary_key=True)
+    topics: Mapped[list[str]] = mapped_column(JSON, default=list)
+    updated_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), default=utc_now, onupdate=utc_now
+    )
