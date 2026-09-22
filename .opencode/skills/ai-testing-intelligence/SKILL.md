@@ -49,6 +49,32 @@ Do not revert unrelated changes in a dirty worktree.
 - Invalidate relevant Redis prefixes after collection, analysis, deletion, or source changes.
 - Keep Python and Node dependencies pinned and keep Docker dependency cache mounts intact.
 
+## Invention Review
+
+Treat `docs/invention-governance-zh.md` as the public process and the Git-ignored
+`.invention-record.md` as the private invention ledger.
+
+For every non-trivial technical mechanism or architecture change:
+
+- read the private ledger before designing the change;
+- identify the previously unsolved technical problem and the conventional baseline;
+- prefer, among equally correct and maintainable designs, a mechanism with explicit structural
+  differences, causal interaction between its features, measurable technical effects, and a
+  defensible replacement cost;
+- do not distort product quality or add complexity merely to manufacture a patent claim;
+- update the private ledger when a genuinely new mechanism appears, when implementation or
+  experiment evidence changes, and before any related public disclosure;
+- record whether the mechanism is already public, including the earliest known date and scope;
+- do not promote a candidate to prior-art search until it meets the documented `L3` threshold;
+- keep unpublished mechanisms, claim strategies, experiments, and novelty analysis out of
+  tracked repository files, Issues, PRs, images, demos, and public documentation;
+- mention in the final response whether the invention ledger was updated or why the change did
+  not create or advance a candidate.
+
+Ordinary CRUD, UI changes, prompt wording, fixed thresholds, framework use, caching, indexes,
+hashing, retries, and known security patterns are not invention candidates without a new
+technical structure and reproducible significant effect.
+
 ## Verification
 
 Run checks relevant to the change. For broad changes, run all of them.
@@ -73,6 +99,18 @@ placeholder environment variables:
 ```bash
 docker compose config --quiet
 ```
+
+## User Manual Synchronization
+
+Treat `docs/user-manual-zh.md` as part of the frontend change surface. Whenever a frontend
+change affects navigation, page structure, visible fields, labels, filters, permissions,
+validation constraints, status meanings, destructive-operation consequences, or user workflows:
+
+- update the corresponding user-manual section in the same change;
+- add a new section when introducing a user-visible page or workflow;
+- remove or revise instructions when a control or workflow is removed or renamed;
+- verify documented role access and limits against both the React UI and FastAPI authorization;
+- mention in the final response whether the manual was updated or why no update was needed.
 
 ## Handoff Maintenance
 

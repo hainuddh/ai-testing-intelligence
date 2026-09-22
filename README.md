@@ -21,6 +21,10 @@ npm test -- --run
 npm run dev
 ```
 
+For end-user instructions covering roles, intelligence search and export, source management,
+manual content submission, and administrator functions, see the
+[Chinese user manual](docs/user-manual-zh.md).
+
 ## Docker
 
 For production installation, HTTPS, backup, recovery, upgrade, and troubleshooting

@@ -1,17 +1,20 @@
 import { useEffect, useRef, useState } from 'react'
 import {
+  AppstoreOutlined,
   ArrowRightOutlined,
   DatabaseOutlined,
   DeleteOutlined,
   DownloadOutlined,
   EditOutlined,
   FileSearchOutlined,
+  FilterOutlined,
   GlobalOutlined,
   InboxOutlined,
   LogoutOutlined,
   PlusOutlined,
   RadarChartOutlined,
   TeamOutlined,
+  UnorderedListOutlined,
 } from '@ant-design/icons'
 import {
   Alert,
@@ -655,13 +658,13 @@ export default function App() {
       </header>
       <nav className="command-nav" aria-label="管理导航">
         {tabs.filter((item) => !item.admin || isAdmin).map((item) => (
-          <button key={item.id} aria-label={item.label} className={tab === item.id ? 'active' : ''} onClick={() => { setError(''); setTab(item.id) }}>
+          <button key={item.id} aria-label={item.label} aria-current={tab === item.id ? 'page' : undefined} className={tab === item.id ? 'active' : ''} onClick={() => { setError(''); setTab(item.id) }}>
             {item.icon}<span>{item.label}</span>
           </button>
         ))}
       </nav>
       <section className="dashboard-content">
-        {error && <Alert className="dashboard-alert" type="error" message={error} showIcon closable onClose={() => setError('')} />}
+        {error && <Alert className="dashboard-alert" type="error" title={error} showIcon closable onClose={() => setError('')} />}
         {tab === 'content' && <ContentView items={content} total={contentTotal} page={contentPage} loading={loading} query={query} startDate={startDate} endDate={endDate} minValueScore={minValueScore} selectedIds={selectedContentIds} exporting={exporting} onQuery={setQuery} onStartDate={setStartDate} onEndDate={setEndDate} onMinValueScore={setMinValueScore} onOpen={setSelectedContent} onToggleSelection={toggleContentSelection} onToggleCurrentPage={toggleCurrentPageSelection} onClearSelection={() => setSelectedContentIds([])} onExport={() => void exportSelectedContent()} onSearch={() => { setSelectedContentIds([]); setContentPage(1); void loadContent(1, query) }} onReset={() => { setSelectedContentIds([]); setQuery(''); setStartDate(''); setEndDate(''); setMinValueScore(60); setContentPage(1); void loadContent(1, '', '', '', 60) }} onPage={(page) => { setContentPage(page); void loadContent(page) }} />}
         {tab === 'sources' && <SourcesView sources={sources} total={sourceTotal} loading={loading} canManage={canManageSources} canDelete={isAdmin} onAdd={() => openSource()} onDiscover={openDiscovery} onManualContent={openManualContent} onEndpoints={(source) => void openEndpoints(source)} onEdit={openSource} onDelete={(source) => Modal.confirm({ title: `删除信源「${source.name}」？`, content: '删除后无法恢复，并会清除关联内容。', okText: '确认删除', cancelText: '取消', okButtonProps: { danger: true }, onOk: () => removeSource(source) })} />}
         {tab === 'collection' && isAdmin && <CollectedContentView items={collectedItems} total={collectedTotal} page={collectedPage} loading={loading} sources={sources} query={collectedQuery} status={collectedStatus} sourceId={collectedSource} startDate={collectedStartDate} endDate={collectedEndDate} selectedIds={selectedCollectedIds} onQuery={setCollectedQuery} onStatus={setCollectedStatus} onSource={setCollectedSource} onStartDate={setCollectedStartDate} onEndDate={setCollectedEndDate} onToggle={(id) => setSelectedCollectedIds((current) => { if (current.includes(id)) return current.filter((value) => value !== id); if (current.length >= 100) { setError('单次最多删除 100 条采集内容'); return current } return [...current, id] })} onTogglePage={() => { const pageIds = collectedItems.map((item) => item.id); const all = pageIds.every((id) => selectedCollectedIds.includes(id)); setSelectedCollectedIds((current) => { if (all) return current.filter((id) => !pageIds.includes(id)); const additions = pageIds.filter((id) => !current.includes(id)); const available = 100 - current.length; if (additions.length > available) setError('单次最多删除 100 条采集内容'); return [...current, ...additions.slice(0, available)] }) }} onApply={() => { const filters = { query: collectedQuery, status: collectedStatus, sourceId: collectedSource, startDate: collectedStartDate, endDate: collectedEndDate }; setAppliedCollectedFilters(filters); setSelectedCollectedIds([]); setCollectedPage(1); void loadCollectedContent(1, filters) }} onReset={() => { const filters = { query: '', status: '', sourceId: '', startDate: '', endDate: '' }; setCollectedQuery(''); setCollectedStatus(''); setCollectedSource(''); setCollectedStartDate(''); setCollectedEndDate(''); setAppliedCollectedFilters(filters); setSelectedCollectedIds([]); setCollectedPage(1); void loadCollectedContent(1, filters) }} onPage={(page) => { setCollectedPage(page); void loadCollectedContent(page, appliedCollectedFilters) }} onDelete={(ids) => Modal.confirm({ title: `删除 ${ids.length} 条采集内容？`, content: '删除后原始采集记录和分析结果均无法恢复。', okText: '确认删除', cancelText: '取消', okButtonProps: { danger: true }, onOk: () => deleteCollectedItems(ids) })} />}
@@ -687,7 +690,7 @@ function Login({ error, loading, onLogin }: { error: string; loading: boolean; o
     </section>
     <section className="login-panel"><div className="login-card">
       <span className="status-line"><i /> RADAR ONLINE</span><h2>分析员登录</h2><p>进入你的专属情报扇区</p>
-      {error && <Alert type="error" message={error} showIcon />}
+      {error && <Alert type="error" title={error} showIcon />}
       <Form layout="vertical" requiredMark={false} onFinish={onLogin}>
         <Form.Item label="用户名" name="username" rules={[{ required: true, message: '请输入用户名' }]}><Input size="large" autoComplete="username" placeholder="analyst" /></Form.Item>
         <Form.Item label="密码" name="password" rules={[{ required: true, message: '请输入密码' }]}><Input.Password size="large" autoComplete="current-password" placeholder="输入访问口令" /></Form.Item>
@@ -702,26 +705,62 @@ function PageIntro({ kicker, title, copy, action }: { kicker: string; title: str
 }
 
 function ContentView({ items, total, page, loading, query, startDate, endDate, minValueScore, selectedIds, exporting, onQuery, onStartDate, onEndDate, onMinValueScore, onOpen, onToggleSelection, onToggleCurrentPage, onClearSelection, onExport, onSearch, onReset, onPage }: { items: ContentItem[]; total: number; page: number; loading: boolean; query: string; startDate: string; endDate: string; minValueScore: number; selectedIds: number[]; exporting: boolean; onQuery: (value: string) => void; onStartDate: (value: string) => void; onEndDate: (value: string) => void; onMinValueScore: (value: number) => void; onOpen: (item: ContentItem) => void; onToggleSelection: (id: number) => void; onToggleCurrentPage: () => void; onClearSelection: () => void; onExport: () => void; onSearch: () => void; onReset: () => void; onPage: (page: number) => void }) {
+  const [viewMode, setViewMode] = useState<'compact' | 'card'>('compact')
+  const [advancedFiltersOpen, setAdvancedFiltersOpen] = useState(Boolean(startDate || endDate))
   const pageSelected = items.length > 0 && items.every((item) => selectedIds.includes(item.id))
+  const hasFilters = Boolean(query || startDate || endDate || minValueScore !== 60)
+  const advancedFilterCount = Number(Boolean(startDate)) + Number(Boolean(endDate))
+
   return <>
     <PageIntro kicker="INTELLIGENCE FEED / LIVE" title="内容情报" copy="聚合监听网络中的最新信号，快速定位值得跟进的变化。" />
     <div className="feed-tools">
-      <Input.Search value={query} onChange={(event) => onQuery(event.target.value)} onSearch={onSearch} enterButton="检索" placeholder="检索标题、摘要或正文" aria-label="检索内容" />
-      <div className="date-filter"><label>开始日期<input type="date" value={startDate} max={endDate || undefined} onChange={(event) => onStartDate(event.target.value)} /></label><i>至</i><label>结束日期<input type="date" value={endDate} min={startDate || undefined} onChange={(event) => onEndDate(event.target.value)} /></label><label>最低价值<Select value={minValueScore} onChange={onMinValueScore} options={[{ value: 40, label: '观察 40+' }, { value: 60, label: '推荐 60+' }, { value: 80, label: '高价值 80+' }]} /></label><Button onClick={onSearch}>应用筛选</Button>{(query || startDate || endDate || minValueScore !== 60) && <Button type="text" onClick={onReset}>重置</Button>}</div>
-      <span>{total} 条情报</span>
+      <div className="feed-toolbar">
+        <Input.Search value={query} onChange={(event) => onQuery(event.target.value)} onSearch={onSearch} enterButton="检索" placeholder="检索标题、摘要或正文" aria-label="检索内容" />
+        <label className="value-filter"><span>最低价值</span><Select aria-label="最低测试价值" value={minValueScore} onChange={onMinValueScore} options={[{ value: 40, label: '观察 40+' }, { value: 60, label: '推荐 60+' }, { value: 80, label: '高价值 80+' }]} /></label>
+        <Button aria-label="更多筛选" aria-expanded={advancedFiltersOpen} icon={<FilterOutlined />} onClick={() => setAdvancedFiltersOpen((open) => !open)}>更多筛选{advancedFilterCount > 0 ? ` (${advancedFilterCount})` : ''}</Button>
+        <Button type="primary" onClick={onSearch}>应用</Button>
+        <div className="view-switch" role="group" aria-label="情报视图">
+          <Button aria-label="紧凑列表" aria-pressed={viewMode === 'compact'} type={viewMode === 'compact' ? 'primary' : 'text'} icon={<UnorderedListOutlined />} onClick={() => setViewMode('compact')}>紧凑列表</Button>
+          <Button aria-label="卡片视图" aria-pressed={viewMode === 'card'} type={viewMode === 'card' ? 'primary' : 'text'} icon={<AppstoreOutlined />} onClick={() => setViewMode('card')}>卡片视图</Button>
+        </div>
+        <span className="result-count">{total} 条情报</span>
+      </div>
+      {advancedFiltersOpen && <div className="advanced-filters">
+        <label>开始日期<input aria-label="开始日期" type="date" value={startDate} max={endDate || undefined} onChange={(event) => onStartDate(event.target.value)} /></label>
+        <i>至</i>
+        <label>结束日期<input aria-label="结束日期" type="date" value={endDate} min={startDate || undefined} onChange={(event) => onEndDate(event.target.value)} /></label>
+        <Button onClick={onSearch}>应用筛选</Button>
+        {hasFilters && <Button type="text" onClick={onReset}>重置全部</Button>}
+      </div>}
+      {hasFilters && <div className="active-filters" aria-label="当前筛选条件">
+        <span>当前条件</span>
+        {query && <Tag>关键词：{query}</Tag>}
+        <Tag color="blue">价值 {minValueScore}+</Tag>
+        {startDate && <Tag>从 {startDate}</Tag>}
+        {endDate && <Tag>至 {endDate}</Tag>}
+        <Button type="link" onClick={onReset}>清除</Button>
+      </div>}
     </div>
     <div className="selection-bar"><Checkbox checked={pageSelected} indeterminate={!pageSelected && items.some((item) => selectedIds.includes(item.id))} onChange={onToggleCurrentPage}>全选当前页</Checkbox><span>已选择 {selectedIds.length} 条</span>{selectedIds.length > 0 && <Button type="text" onClick={onClearSelection}>清空选择</Button>}<Button type="primary" icon={<DownloadOutlined />} disabled={selectedIds.length === 0} loading={exporting} onClick={onExport} aria-label={`导出 Markdown (${selectedIds.length})`}>导出 Markdown ({selectedIds.length})</Button></div>
-    {loading && items.length === 0 ? <Loading text="正在扫描情报流..." /> : items.length === 0 ? <Empty icon={<FileSearchOutlined />} title="当前扇区没有匹配的情报。" /> : <>
-      <div className={`content-grid${loading ? ' is-refreshing' : ''}`}>{items.map((item) => <article className={`content-card ${selectedIds.includes(item.id) ? 'selected' : ''}`} key={item.id}>
+    {loading && items.length === 0 ? <ContentSkeleton /> : items.length === 0 ? <Empty icon={<FileSearchOutlined />} title="当前扇区没有匹配的情报。" /> : <>
+      {loading && <div className="refresh-indicator" role="status" aria-label="正在更新情报列表"><Spin size="small" /><span>正在更新情报列表，现有内容仍可浏览</span></div>}
+      <div className={`content-grid ${viewMode === 'compact' ? 'compact-view' : 'card-view'}`} role="list" aria-label="情报列表">{items.map((item) => <article className={`content-card ${selectedIds.includes(item.id) ? 'selected' : ''}`} role="listitem" key={item.id}>
         <span className="card-selector" onClick={(event) => event.stopPropagation()} onKeyDown={(event) => event.stopPropagation()}><Checkbox checked={selectedIds.includes(item.id)} onChange={() => onToggleSelection(item.id)} aria-label={`选择 ${item.title}`} /></span>
         <div className="content-meta"><span>{dateText(item.published_at || item.fetched_at)}</span><span>{item.source_name}</span></div>
-        <div className="score-line"><Tag color="green">测试相关 {item.testing_relevance_score ?? 0}</Tag><Tag color={(item.testing_value_score ?? 0) >= 80 ? 'gold' : 'blue'}>测试价值 {item.testing_value_score ?? 0}</Tag></div>
+        <div className="score-line"><Tag className="score-relevance">相关 {item.testing_relevance_score ?? 0}</Tag><Tag className={(item.testing_value_score ?? 0) >= 80 ? 'score-value high' : 'score-value'}>价值 {item.testing_value_score ?? 0}</Tag></div>
         <h2><button type="button" onClick={(event) => { event.stopPropagation(); onOpen(item) }}>{item.title}</button></h2>
-        <p>{item.analysis_summary || '等待测试价值摘要'}</p><button className="read-link" type="button" onClick={() => onOpen(item)}>查看测试情报 <ArrowRightOutlined /></button>
+        <p>{item.analysis_summary || '等待测试价值摘要'}</p><button className="read-link" type="button" onClick={() => onOpen(item)}>查看详情 <ArrowRightOutlined /></button>
       </article>)}</div>
       {total > 12 && <Pagination className="radar-pagination" current={page} total={total} pageSize={12} showSizeChanger={false} onChange={onPage} />}
     </>}
   </>
+}
+
+function ContentSkeleton() {
+  return <div className="content-skeleton" role="status" aria-label="正在扫描情报流">
+    <span className="sr-only">正在扫描情报流</span>
+    {[0, 1, 2, 3].map((item) => <article key={item}><i /><strong /><span /><span /></article>)}
+  </div>
 }
 
 function IntelligenceModal({ item, onClose }: { item: ContentItem | null; onClose: () => void }) {
@@ -792,7 +831,7 @@ function CollectedContentView({ items, total, page, loading, sources, query, sta
       {items.map((item) => <div className="collection-row" role="row" key={item.id}>
         <Checkbox checked={selectedIds.includes(item.id)} onChange={() => onToggle(item.id)} aria-label={`选择采集内容 ${item.title}`} />
         <div className="collection-title"><button type="button" onClick={() => setSelectedItem(item)}>{item.title}</button><small>{item.source_name}</small>{item.analysis_error && <em title={item.analysis_error}>{item.analysis_error}</em>}</div>
-        <Tag className="collection-status" color={item.analysis_status === 'analyzed' ? 'green' : item.analysis_status === 'failed' ? 'red' : item.analysis_status === 'filtered' ? 'default' : 'blue'}>{analysisStatusLabels[item.analysis_status]}</Tag>
+        <Tag className={`collection-status status-${item.analysis_status}`}>{analysisStatusLabels[item.analysis_status]}</Tag>
         <span className="collection-score" data-label="相关/价值">{item.testing_relevance_score ?? '-'} / {item.testing_value_score ?? '-'}</span>
         <time className="collection-time" data-label="采集时间">{dateText(item.fetched_at)}</time>
         <Button type="text" danger icon={<DeleteOutlined />} aria-label={`删除采集内容 ${item.title}`} onClick={() => onDelete([item.id])} />
@@ -808,7 +847,7 @@ function CollectedContentModal({ item, onClose }: { item: CollectedItem | null; 
   return <Modal className="intel-modal collected-modal" width={760} open title={null} footer={null} onCancel={onClose}>
     <div className="intel-kicker">COLLECTED CONTENT / #{item.id}</div>
     <h2>{item.title}</h2>
-    <div className="intel-meta"><span>{item.source_name}</span><Tag color={item.analysis_status === 'analyzed' ? 'green' : item.analysis_status === 'failed' ? 'red' : item.analysis_status === 'filtered' ? 'default' : 'blue'}>{analysisStatusLabels[item.analysis_status]}</Tag><span>相关性 {item.testing_relevance_score ?? '-'}</span><span>价值 {item.testing_value_score ?? '-'}</span></div>
+    <div className="intel-meta"><span>{item.source_name}</span><Tag className={`status-${item.analysis_status}`}>{analysisStatusLabels[item.analysis_status]}</Tag><span>相关性 {item.testing_relevance_score ?? '-'}</span><span>价值 {item.testing_value_score ?? '-'}</span></div>
     <section className="intel-section"><h3>原始摘要</h3><p>{item.summary || '暂无摘要'}</p></section>
     {item.related_links && item.related_links.length > 0 && <section className="intel-section related-links"><h3>相关链接</h3><ul>{item.related_links.map((link) => <li key={link.url}><a href={link.url} target="_blank" rel="noreferrer">{link.title} <ArrowRightOutlined /></a></li>)}</ul></section>}
     <div className="collected-detail-grid"><div><span>发布时间</span><strong>{dateTimeText(item.published_at)}</strong></div><div><span>采集时间</span><strong>{dateTimeText(item.fetched_at)}</strong></div><div><span>分析时间</span><strong>{dateTimeText(item.analyzed_at)}</strong></div><div><span>分析次数</span><strong>{item.analysis_attempts}</strong></div></div>
@@ -852,7 +891,7 @@ function SourceDrawer({ open, editing, form, saving, onClose, onSave }: { open: 
 function UserDrawer({ open, editing, form, saving, error, onClose, onSave }: { open: boolean; editing: User | null; form: FormInstance<UserForm>; saving: boolean; error: string; onClose: () => void; onSave: (values: UserForm) => void }) {
   return <Drawer title={<><span className="drawer-kicker">ACCESS PROFILE</span><strong>{editing ? '编辑用户' : '新增用户'}</strong></>} open={open} onClose={onClose} destroyOnHidden>
     <p className="drawer-copy">配置账号身份及其可访问的雷达扇区。</p>
-    {error && <Alert className="drawer-alert" type="error" message={error} showIcon />}
+    {error && <Alert className="drawer-alert" type="error" title={error} showIcon />}
     <Form form={form} layout="vertical" requiredMark={false} onFinish={onSave}>
       <Form.Item label="用户名" name="username" rules={[{ required: true, message: '请输入用户名' }]}><Input /></Form.Item>
       <Form.Item label={editing ? '新密码（留空则不修改）' : '初始密码'} name="password" rules={[...(editing ? [] : [{ required: true, message: '请输入初始密码' }]), { min: 8, message: '密码至少需要 8 个字符' }]}><Input.Password autoComplete="new-password" /></Form.Item>
@@ -891,5 +930,5 @@ function ManualContentDrawer({ open, source, form, saving, onClose, onSave }: { 
   </Drawer>
 }
 
-function Loading({ text }: { text: string }) { return <div className="loading-state"><Spin /><span>{text}</span></div> }
+function Loading({ text }: { text: string }) { return <div className="loading-state" role="status" aria-label={text}><Spin /><span>{text}</span></div> }
 function Empty({ icon, title }: { icon: React.ReactNode; title: string }) { return <div className="empty-state">{icon}<strong>{title}</strong><span>扫描将在数据抵达后自动呈现结果</span></div> }

@@ -45,6 +45,7 @@ describe('management radar workflow', () => {
     expect(fetchMock).toHaveBeenNthCalledWith(2, '/api/v1/auth/me', expect.objectContaining({
       headers: expect.objectContaining({ Authorization: 'Bearer radar-token' }),
     }))
+    expect(screen.getByRole('button', { name: '内容情报' })).toHaveAttribute('aria-current', 'page')
     expect(screen.queryByRole('button', { name: '用户管理' })).not.toBeInTheDocument()
   })
 
@@ -67,6 +68,15 @@ describe('management radar workflow', () => {
 
     render(<App />)
     expect(await screen.findByText('Agents gain new tools')).toBeInTheDocument()
+    const compactView = screen.getByRole('button', { name: '紧凑列表' })
+    const cardView = screen.getByRole('button', { name: '卡片视图' })
+    expect(compactView).toHaveAttribute('aria-pressed', 'true')
+    expect(document.querySelector('.content-grid')).toHaveClass('compact-view')
+    await userEvent.click(cardView)
+    expect(screen.getByRole('button', { name: '卡片视图' })).toHaveAttribute('aria-pressed', 'true')
+    expect(document.querySelector('.content-grid')).toHaveClass('card-view')
+    await userEvent.click(screen.getByRole('button', { name: '紧凑列表' }))
+
     const search = screen.getByLabelText('检索内容')
     await userEvent.type(search, 'agents')
     await userEvent.type(search, '{Enter}')
@@ -76,6 +86,8 @@ describe('management radar workflow', () => {
       expect.objectContaining({ headers: expect.objectContaining({ Authorization: 'Bearer existing-token' }) }),
     ))
 
+    expect(screen.queryByLabelText('开始日期')).not.toBeInTheDocument()
+    await userEvent.click(screen.getByRole('button', { name: '更多筛选' }))
     fireEvent.change(screen.getByLabelText('开始日期'), { target: { value: '2026-08-01' } })
     fireEvent.change(screen.getByLabelText('结束日期'), { target: { value: '2026-08-31' } })
     await userEvent.click(screen.getByRole('button', { name: '应用筛选' }))
@@ -92,6 +104,17 @@ describe('management radar workflow', () => {
     expect(screen.getByText('Useful for autonomous regression testing.')).toBeInTheDocument()
     expect(screen.getByRole('link', { name: /Evaluation benchmark/ })).toHaveAttribute('href', 'https://example.org/benchmark')
     expect(screen.getByRole('link', { name: /查看原文/ })).toHaveAttribute('href', item.url)
+  })
+
+  it('announces the initial intelligence loading state', async () => {
+    localStorage.setItem('access_token', 'existing-token')
+    vi.spyOn(globalThis, 'fetch')
+      .mockResolvedValueOnce(json({ id: 'user-1', username: 'reader', role: 'viewer' }))
+      .mockImplementationOnce(() => new Promise<Response>(() => undefined))
+
+    render(<App />)
+
+    expect(await screen.findByRole('status', { name: '正在扫描情报流' })).toBeInTheDocument()
   })
 
   it('selects multiple intelligence cards and downloads a Markdown report', async () => {
@@ -298,6 +321,7 @@ describe('management radar workflow', () => {
     await screen.findByRole('heading', { name: '内容情报' })
     await user.click(screen.getByRole('button', { name: '采集管理' }))
     expect(await screen.findByText('Testing candidate')).toBeInTheDocument()
+    expect(screen.getByText('待分析')).toHaveClass('status-pending')
     await user.click(screen.getByRole('button', { name: 'Testing candidate' }))
     expect(await screen.findByText('原始摘要')).toBeInTheDocument()
     expect(screen.getByText('A testing summary')).toBeInTheDocument()

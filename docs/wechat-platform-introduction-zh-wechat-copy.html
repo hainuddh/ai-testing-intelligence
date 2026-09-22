@@ -1,0 +1,209 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>测试情报雷达｜微信公众号复制版</title>
+</head>
+<body style="margin:0;padding:0;background:#eef2f5;font-family:-apple-system,BlinkMacSystemFont,'PingFang SC','Microsoft YaHei',Arial,sans-serif;color:#1f2937;">
+  <div style="max-width:760px;margin:18px auto 12px;padding:18px 20px;background:#172033;color:#ffffff;border-radius:12px;box-sizing:border-box;box-shadow:0 8px 24px rgba(23,32,51,0.16);">
+    <div style="font-size:18px;line-height:1.5;font-weight:800;">公众号复制说明</div>
+    <div style="margin-top:7px;color:#d7dee8;font-size:13.5px;line-height:1.8;">点击按钮复制下方正文排版，再粘贴到微信公众号图文编辑器。建议粘贴后用手机预览一次，确认字体、间距和强调色显示正常。</div>
+    <button id="copyArticle" type="button" style="display:inline-block;margin-top:14px;padding:10px 20px;border:0;border-radius:7px;background:#07c160;color:#ffffff;font-size:15px;font-weight:700;line-height:1.4;cursor:pointer;">复制正文排版</button>
+    <span id="copyStatus" style="display:inline-block;margin-left:12px;color:#b8c4d6;font-size:13px;line-height:1.6;"></span>
+  </div>
+
+  <section id="wechatArticle" style="max-width:680px;margin:0 auto 32px;padding:34px 24px 44px;background:#ffffff;box-sizing:border-box;line-height:1.9;box-shadow:0 7px 25px rgba(31,41,55,0.08);">
+    <section style="margin:0 0 30px;padding:26px 20px 23px;background:#172033;border-radius:12px;text-align:left;box-sizing:border-box;">
+      <p style="margin:0 0 10px;color:#6ee7a2;font-size:12px;line-height:1.5;font-weight:700;letter-spacing:2px;">AI TESTING INTELLIGENCE</p>
+      <h1 style="margin:0;color:#ffffff;font-size:26px;line-height:1.46;font-weight:800;letter-spacing:0.2px;">别再追着 AI 新闻跑了</h1>
+      <p style="margin:9px 0 0;color:#dbe4f0;font-size:16px;line-height:1.75;font-weight:600;">这个「测试情报雷达」，只留下真正值得测的信号</p>
+      <div style="width:38px;height:4px;margin-top:18px;background:#07c160;border-radius:4px;font-size:0;line-height:0;">&nbsp;</div>
+    </section>
+
+    <section style="margin:0 0 28px;padding:16px 17px;background:#f2fbf5;border-left:4px solid #07c160;border-radius:0 8px 8px 0;box-sizing:border-box;">
+      <p style="margin:0;color:#334155;font-size:15.5px;line-height:1.9;">每天都有新模型、新框架、新 Agent、新工具发布。</p>
+      <p style="margin:4px 0 0;color:#172033;font-size:15.5px;line-height:1.9;font-weight:700;">对测试团队来说，难点从来不是「看到新闻」，而是判断：它和测试有什么关系？值不值得验证？怎么落地？</p>
+    </section>
+
+    <p style="margin:14px 0;color:#273142;font-size:15.5px;line-height:1.95;">早上打开技术社区，满屏又是模型升级、产品发布、论文解读。</p>
+    <p style="margin:14px 0;color:#273142;font-size:15.5px;line-height:1.95;">你顺手点开十几篇，收藏、打标签，心想「回头细看」——然后，它们就安静地躺在收藏夹里吃灰了。</p>
+    <p style="margin:14px 0;color:#273142;font-size:15.5px;line-height:1.95;">这不是你的问题。是 AI 信息的增速，早就超过了任何团队消化的速度。</p>
+    <p style="margin:14px 0;color:#273142;font-size:15.5px;line-height:1.95;">关注几十个公众号、博客、资讯站之后，你获得的往往不是更多洞察，而是更多「待读」。</p>
+    <p style="margin:18px 0 10px;color:#172033;font-size:16px;line-height:1.8;font-weight:700;">对测试团队，问题更具体：</p>
+
+    <section style="margin:12px 0 24px;padding:16px 18px;background:#f7f8fa;border:1px solid #e5e9ef;border-radius:10px;box-sizing:border-box;">
+      <p style="margin:0 0 9px;color:#334155;font-size:15px;line-height:1.85;">① 这项技术，会改变我们现在的测试流程吗？</p>
+      <p style="margin:0 0 9px;color:#334155;font-size:15px;line-height:1.85;">② 它适合接口测试、智能体测试，还是模型评测？</p>
+      <p style="margin:0 0 9px;color:#334155;font-size:15px;line-height:1.85;">③ 厂商说的「效率提升 10 倍」，到底怎么验证？</p>
+      <p style="margin:0 0 9px;color:#334155;font-size:15px;line-height:1.85;">④ 引入之后，会不会带来数据泄露、结果不稳定，或者供应商锁定？</p>
+      <p style="margin:0;color:#334155;font-size:15px;line-height:1.85;">⑤ 我刷到的这篇，到底是测试情报，还是又一条普通 AI 新闻？</p>
+    </section>
+
+    <p style="margin:16px 0;color:#273142;font-size:15.5px;line-height:1.95;">我们因此搭了一个东西：<strong style="color:#079447;font-weight:800;">AI Testing Intelligence</strong>，代号 <strong style="color:#079447;font-weight:800;">SIGNAL ATLAS · 技术情报雷达</strong>。</p>
+    <p style="margin:16px 0 30px;color:#273142;font-size:15.5px;line-height:1.95;">它不是又一个新闻聚合器，而是一套<strong style="color:#172033;font-weight:800;">面向测试工作</strong>的情报发现、分析和交付平台——帮团队从噪声里，捞出真正值得测的信号。</p>
+
+    <h2 style="margin:36px 0 18px;padding-left:12px;border-left:5px solid #07c160;color:#172033;font-size:21px;line-height:1.5;font-weight:800;">一条新闻，为什么要变成「测试情报」？</h2>
+    <p style="margin:13px 0;color:#273142;font-size:15.5px;line-height:1.95;">普通资讯只告诉你：发生了什么。</p>
+    <p style="margin:13px 0 20px;color:#273142;font-size:15.5px;line-height:1.95;">测试情报，还得回答另外四件事。</p>
+
+    <h3 style="margin:22px 0 8px;color:#079447;font-size:17px;line-height:1.6;font-weight:800;">01｜它和测试，到底相不相关？</h3>
+    <p style="margin:8px 0 18px;color:#273142;font-size:15.5px;line-height:1.95;">一项技术可能很火，却未必对你的测试有直接价值。平台先评估内容与测试活动的相关度，不把一般性 AI 新闻全堆进主页。</p>
+
+    <h3 style="margin:22px 0 8px;color:#079447;font-size:17px;line-height:1.6;font-weight:800;">02｜它的测试价值，有多高？</h3>
+    <p style="margin:8px 0 18px;color:#273142;font-size:15.5px;line-height:1.95;">相关 ≠ 马上跟。系统会给出「测试价值评分」，帮团队分清三类：<strong style="color:#172033;font-weight:800;">可以观察 / 值得研究 / 建议优先验证</strong>。</p>
+
+    <h3 style="margin:22px 0 8px;color:#079447;font-size:17px;line-height:1.6;font-weight:800;">03｜它能用在哪些场景？</h3>
+    <p style="margin:8px 0 12px;color:#273142;font-size:15.5px;line-height:1.95;">举几个例子：</p>
+    <section style="margin:10px 0 20px;padding:15px 18px;background:#f7f8fa;border-radius:10px;box-sizing:border-box;">
+      <p style="margin:0 0 7px;color:#334155;font-size:15px;line-height:1.8;">• AI Agent 多轮任务验证</p>
+      <p style="margin:0 0 7px;color:#334155;font-size:15px;line-height:1.8;">• 大模型幻觉与事实一致性测试</p>
+      <p style="margin:0 0 7px;color:#334155;font-size:15px;line-height:1.8;">• RAG 检索质量评估</p>
+      <p style="margin:0 0 7px;color:#334155;font-size:15px;line-height:1.8;">• 接口自动化与用例生成</p>
+      <p style="margin:0 0 7px;color:#334155;font-size:15px;line-height:1.8;">• 测试数据构造</p>
+      <p style="margin:0 0 7px;color:#334155;font-size:15px;line-height:1.8;">• 安全、隐私与提示词注入测试</p>
+      <p style="margin:0;color:#334155;font-size:15px;line-height:1.8;">• 模型版本回归与效果对比</p>
+    </section>
+
+    <h3 style="margin:22px 0 8px;color:#079447;font-size:17px;line-height:1.6;font-weight:800;">04｜团队应该怎么落地？</h3>
+    <p style="margin:8px 0 26px;color:#273142;font-size:15.5px;line-height:1.95;">平台不会只丢给你一段摘要，还会整理可执行的验证建议、适用场景、风险边界。让一篇资讯，更接近一份<strong style="color:#172033;font-weight:800;">可以直接拿去评审的测试输入</strong>。</p>
+
+    <h2 style="margin:38px 0 18px;padding-left:12px;border-left:5px solid #07c160;color:#172033;font-size:21px;line-height:1.5;font-weight:800;">从「信息过载」到「持续雷达扫描」</h2>
+    <p style="margin:13px 0 22px;color:#273142;font-size:15.5px;line-height:1.95;">SIGNAL ATLAS 的核心流程，就四步。</p>
+
+    <section style="margin:0 0 16px;padding:18px;background:#ffffff;border:1px solid #dfe5ec;border-radius:10px;box-sizing:border-box;">
+      <p style="margin:0 0 9px;color:#079447;font-size:12px;line-height:1.5;font-weight:800;letter-spacing:1px;">STEP 01</p>
+      <h3 style="margin:0 0 9px;color:#172033;font-size:17px;line-height:1.6;font-weight:800;">把信源「收编」进一个池子</h3>
+      <p style="margin:0;color:#3b4658;font-size:15px;line-height:1.9;">官网、技术博客、Newsletter、RSS、公众号、微博……统一纳进信源管理。每个信源可配置类型、可信等级、语言、关注主题、采集端点、采集间隔和单次数量。</p>
+      <p style="margin:10px 0 0;color:#172033;font-size:15px;line-height:1.9;font-weight:700;">情报来源不再散落在个人收藏夹，而是沉淀成团队共同维护的信源资产。</p>
+    </section>
+
+    <section style="margin:0 0 16px;padding:18px;background:#ffffff;border:1px solid #dfe5ec;border-radius:10px;box-sizing:border-box;">
+      <p style="margin:0 0 9px;color:#079447;font-size:12px;line-height:1.5;font-weight:800;letter-spacing:1px;">STEP 02</p>
+      <h3 style="margin:0 0 9px;color:#172033;font-size:17px;line-height:1.6;font-weight:800;">让机器替你刷，还自动去重</h3>
+      <p style="margin:0;color:#3b4658;font-size:15px;line-height:1.9;">后台按设定周期检查内容：RSS/Atom 读取最新条目，普通网页定期检查变化。所有内容按原文地址历史去重，避免同一条信息被反复收录。</p>
+      <p style="margin:10px 0 0;color:#3b4658;font-size:15px;line-height:1.9;">公众号、微博处理更审慎：只接来源明确、已授权的 RSS/Atom；也可由人工录入标题、链接和摘要，保留原始证据链，再进入统一去重与分析。</p>
+    </section>
+
+    <section style="margin:0 0 16px;padding:18px;background:#ffffff;border:1px solid #dfe5ec;border-radius:10px;box-sizing:border-box;">
+      <p style="margin:0 0 9px;color:#079447;font-size:12px;line-height:1.5;font-weight:800;letter-spacing:1px;">STEP 03</p>
+      <h3 style="margin:0 0 9px;color:#172033;font-size:17px;line-height:1.6;font-weight:800;">用 AI 判断「它值不值得测」</h3>
+      <p style="margin:0 0 11px;color:#3b4658;font-size:15px;line-height:1.9;">内容进入系统后，由兼容 OpenAI 接口的分析模型做测试情报分析，产出：</p>
+      <table cellpadding="0" cellspacing="0" border="0" style="width:100%;border-collapse:collapse;">
+        <tr><td style="width:50%;padding:6px 7px;background:#f5f8f6;border:3px solid #ffffff;color:#334155;font-size:14px;line-height:1.6;">相关性评分</td><td style="width:50%;padding:6px 7px;background:#f5f8f6;border:3px solid #ffffff;color:#334155;font-size:14px;line-height:1.6;">测试价值评分</td></tr>
+        <tr><td style="padding:6px 7px;background:#f5f8f6;border:3px solid #ffffff;color:#334155;font-size:14px;line-height:1.6;">情报摘要</td><td style="padding:6px 7px;background:#f5f8f6;border:3px solid #ffffff;color:#334155;font-size:14px;line-height:1.6;">测试价值分析</td></tr>
+        <tr><td style="padding:6px 7px;background:#f5f8f6;border:3px solid #ffffff;color:#334155;font-size:14px;line-height:1.6;">适用场景</td><td style="padding:6px 7px;background:#f5f8f6;border:3px solid #ffffff;color:#334155;font-size:14px;line-height:1.6;">落地验证建议</td></tr>
+        <tr><td style="padding:6px 7px;background:#f5f8f6;border:3px solid #ffffff;color:#334155;font-size:14px;line-height:1.6;">风险与边界</td><td style="padding:6px 7px;background:#f5f8f6;border:3px solid #ffffff;color:#334155;font-size:14px;line-height:1.6;">情报标签</td></tr>
+      </table>
+      <p style="margin:10px 0 0;color:#3b4658;font-size:15px;line-height:1.9;">与测试无关、价值不足，或缺少可执行建议的内容，会被过滤掉，不进主情报流。</p>
+    </section>
+
+    <section style="margin:17px 0;padding:16px 17px;background:#f2fbf5;border-left:4px solid #07c160;border-radius:0 8px 8px 0;box-sizing:border-box;">
+      <p style="margin:0 0 3px;color:#079447;font-size:15.5px;line-height:1.85;font-weight:800;">这一步最关键。</p>
+      <p style="margin:0;color:#334155;font-size:15.5px;line-height:1.9;">真正有用的系统，不该让你在 AI 生成的另一堆文字里，继续找重点。</p>
+    </section>
+
+    <section style="margin:16px 0 28px;padding:18px;background:#ffffff;border:1px solid #dfe5ec;border-radius:10px;box-sizing:border-box;">
+      <p style="margin:0 0 9px;color:#079447;font-size:12px;line-height:1.5;font-weight:800;letter-spacing:1px;">STEP 04</p>
+      <h3 style="margin:0 0 9px;color:#172033;font-size:17px;line-height:1.6;font-weight:800;">一键导出成能给团队看的报告</h3>
+      <p style="margin:0;color:#3b4658;font-size:15px;line-height:1.9;">在「内容情报」页，按关键词、日期、最低价值分筛选；选中多条，一键导出 Markdown 报告。</p>
+      <p style="margin:10px 0 0;color:#3b4658;font-size:15px;line-height:1.9;">报告保留评分、价值分析、场景、验证建议、风险提示、标签和原文证据链接。它可以直接进入知识库，也能作为技术预研、测试方案讨论、质量评审、周报月报的输入。</p>
+    </section>
+
+    <h2 style="margin:38px 0 18px;padding-left:12px;border-left:5px solid #07c160;color:#172033;font-size:21px;line-height:1.5;font-weight:800;">它不替你做决定，只是帮你缩小范围</h2>
+    <p style="margin:13px 0;color:#273142;font-size:15.5px;line-height:1.95;">SIGNAL ATLAS 不想代替测试负责人拍板。模型评分也不是绝对结论。</p>
+    <p style="margin:13px 0;color:#273142;font-size:15.5px;line-height:1.95;">它真正想解决的，是这件事：</p>
+    <section style="margin:17px 0;padding:17px 18px;background:#172033;border-radius:10px;box-sizing:border-box;">
+      <p style="margin:0;color:#ffffff;font-size:16px;line-height:1.9;font-weight:700;">当信息量远超团队处理能力时，先帮你完成第一轮发现、筛选、结构化——把人的专业判断，留给更重要的决定。</p>
+    </section>
+    <p style="margin:16px 0;color:#273142;font-size:15.5px;line-height:1.95;">过去，要打开多个网站、刷几十篇、手工摘重点、再想和测试的关系。</p>
+    <section style="margin:16px 0;padding:15px 16px;background:#f2fbf5;border:1px solid #cdeedd;border-radius:9px;box-sizing:border-box;">
+      <p style="margin:0 0 7px;color:#738092;font-size:12px;line-height:1.5;font-weight:700;letter-spacing:1px;">NOW</p>
+      <p style="margin:0;color:#172033;font-size:15px;line-height:1.85;font-weight:700;">信源持续采集 → 系统自动去重 → AI 做初步分析 → 测试人员只看高价值候选</p>
+    </section>
+    <p style="margin:16px 0 28px;color:#273142;font-size:15.5px;line-height:1.95;">人的判断仍在最后一环，但进入视野的信息，已经聚焦得多。</p>
+
+    <h2 style="margin:38px 0 18px;padding-left:12px;border-left:5px solid #07c160;color:#172033;font-size:21px;line-height:1.5;font-weight:800;">不同角色，各看各的</h2>
+    <p style="margin:13px 0 15px;color:#273142;font-size:15.5px;line-height:1.95;">平台做了清晰权限划分，降低误删等风险：</p>
+    <section style="margin:0 0 12px;padding:15px 17px;background:#f7f8fa;border-radius:9px;box-sizing:border-box;">
+      <p style="margin:0 0 4px;color:#079447;font-size:16px;line-height:1.7;font-weight:800;">浏览者</p>
+      <p style="margin:0;color:#3b4658;font-size:15px;line-height:1.85;">查看、筛选、阅读情报，也能导出报告。</p>
+    </section>
+    <section style="margin:0 0 12px;padding:15px 17px;background:#f7f8fa;border-radius:9px;box-sizing:border-box;">
+      <p style="margin:0 0 4px;color:#079447;font-size:16px;line-height:1.7;font-weight:800;">维护者</p>
+      <p style="margin:0;color:#3b4658;font-size:15px;line-height:1.85;">新增和编辑信源、配置采集端点，并为公众号或微博人工录入内容。</p>
+    </section>
+    <section style="margin:0 0 17px;padding:15px 17px;background:#f7f8fa;border-radius:9px;box-sizing:border-box;">
+      <p style="margin:0 0 4px;color:#079447;font-size:16px;line-height:1.7;font-weight:800;">管理员</p>
+      <p style="margin:0;color:#3b4658;font-size:15px;line-height:1.85;">管理全部内容、信源和账号，查看用户、信源、端点与内容规模。</p>
+    </section>
+    <p style="margin:14px 0 28px;color:#273142;font-size:15.5px;line-height:1.95;">内容消费、信源维护、系统管理彼此分离——该看的人看，不该动的人别误伤。</p>
+
+    <h2 style="margin:38px 0 18px;padding-left:12px;border-left:5px solid #07c160;color:#172033;font-size:21px;line-height:1.5;font-weight:800;">你的团队，中招了吗？</h2>
+    <p style="margin:13px 0 14px;color:#273142;font-size:15.5px;line-height:1.95;">如果你的团队正面临这些，它可能帮得上：</p>
+    <section style="margin:0 0 22px;padding:17px 18px;background:#fffaf0;border:1px solid #f3dfb2;border-radius:10px;box-sizing:border-box;">
+      <p style="margin:0 0 8px;color:#4b5563;font-size:15px;line-height:1.85;">✓ 每天接触大量 AI 资讯，却缺统一筛选标准</p>
+      <p style="margin:0 0 8px;color:#4b5563;font-size:15px;line-height:1.85;">✓ 想跟进 AI Agent、RAG、大模型评测，但没人系统梳理</p>
+      <p style="margin:0 0 8px;color:#4b5563;font-size:15px;line-height:1.85;">✓ 成员各自维护技术来源，知识难共享</p>
+      <p style="margin:0 0 8px;color:#4b5563;font-size:15px;line-height:1.85;">✓ 预研结果散落在聊天记录、收藏夹、个人文档</p>
+      <p style="margin:0 0 8px;color:#4b5563;font-size:15px;line-height:1.85;">✓ 想把外部资讯转成测试场景和验证建议</p>
+      <p style="margin:0 0 8px;color:#4b5563;font-size:15px;line-height:1.85;">✓ 需要周期性产出测试技术情报报告</p>
+      <p style="margin:0;color:#4b5563;font-size:15px;line-height:1.85;">✓ 想要一个能持续维护、而非一次性整理的情报库</p>
+    </section>
+    <p style="margin:14px 0 29px;color:#273142;font-size:15.5px;line-height:1.95;">它尤其适合测试负责人、质量工程师、测试开发、AI 应用测试人员，以及关注研发效能与质量治理的技术团队。</p>
+
+    <h2 style="margin:38px 0 18px;padding-left:12px;border-left:5px solid #07c160;color:#172033;font-size:21px;line-height:1.5;font-weight:800;">最后说一句</h2>
+    <p style="margin:13px 0;color:#273142;font-size:15.5px;line-height:1.95;">AI 时代，信息本身已经不稀缺。</p>
+    <p style="margin:13px 0;color:#273142;font-size:15.5px;line-height:1.95;">稀缺的是——</p>
+    <section style="margin:18px 0;padding:22px 18px;background:#172033;border-radius:10px;text-align:center;box-sizing:border-box;">
+      <p style="margin:0;color:#6ee7a2;font-size:19px;line-height:1.7;font-weight:800;letter-spacing:0.5px;">从噪声中识别信号的能力。</p>
+    </section>
+    <p style="margin:16px 0;color:#273142;font-size:15.5px;line-height:1.95;">SIGNAL ATLAS 想做的，就是给测试团队装一部持续工作的雷达：不追每条热点，不收藏每篇文章，而是判断哪些变化，真正值得测、值得验、值得进入下一次技术讨论。</p>
+    <p style="margin:16px 0;color:#273142;font-size:15.5px;line-height:1.95;">新闻只会越来越多。我们需要的，不是更快地刷完它们，而是更早地发现：</p>
+    <p style="margin:20px 0 34px;color:#172033;font-size:19px;line-height:1.75;font-weight:800;text-align:center;">下一项可能改变测试工作的技术，已经出现了。</p>
+
+    <section style="margin:0;padding:20px 18px;background:#eafaf0;border:1px solid #cdeedd;border-radius:12px;box-sizing:border-box;">
+      <p style="margin:0 0 12px;color:#079447;font-size:17px;line-height:1.7;font-weight:800;">如果这篇对你有启发，做两件事</p>
+      <p style="margin:0 0 9px;color:#334155;font-size:15px;line-height:1.9;"><strong style="color:#172033;font-weight:800;">1. 转给团队里负责技术预研、跟 AI 动态的人</strong><br>他大概率正被信息淹没，这篇文章能替你说话。</p>
+      <p style="margin:0;color:#334155;font-size:15px;line-height:1.9;"><strong style="color:#172033;font-weight:800;">2. 关注我们</strong><br>下一篇聊：怎么用最低成本，搭起这套雷达的「信源网络」。</p>
+    </section>
+    <p style="margin:25px 0 0;color:#7b8492;font-size:13.5px;line-height:1.8;text-align:center;">觉得有用就点个「在看」<br>让更多被 AI 新闻淹没的测试同学看见</p>
+  </section>
+
+<script>
+(function () {
+  var button = document.getElementById('copyArticle');
+  var status = document.getElementById('copyStatus');
+  var article = document.getElementById('wechatArticle');
+
+  button.addEventListener('click', function () {
+    var selection = window.getSelection();
+    var range = document.createRange();
+    range.selectNodeContents(article);
+    selection.removeAllRanges();
+    selection.addRange(range);
+
+    var ok = false;
+    try {
+      ok = document.execCommand('copy');
+    } catch (error) {
+      ok = false;
+    }
+    selection.removeAllRanges();
+
+    if (ok) {
+      status.textContent = '已复制，请粘贴到公众号编辑器';
+      button.textContent = '复制成功';
+      button.style.background = '#079447';
+      window.setTimeout(function () {
+        button.textContent = '复制正文排版';
+        button.style.background = '#07c160';
+      }, 2200);
+    } else {
+      status.textContent = '自动复制失败，请手动选中正文区域复制';
+    }
+  });
+})();
+</script>
+</body>
+</html>
