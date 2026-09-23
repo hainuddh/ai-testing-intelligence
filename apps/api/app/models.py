@@ -90,6 +90,10 @@ class ContentItem(Base):
         DateTime(timezone=True), default=utc_now, index=True
     )
     analysis_status: Mapped[str] = mapped_column(String(30), default="pending", index=True)
+    analysis_disposition: Mapped[str | None] = mapped_column(
+        String(30), nullable=True, index=True
+    )
+    filter_reason: Mapped[str | None] = mapped_column(String(100), nullable=True)
     analysis_attempts: Mapped[int] = mapped_column(Integer, default=0)
     testing_relevance_score: Mapped[int | None] = mapped_column(
         Integer, nullable=True, index=True

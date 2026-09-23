@@ -22,6 +22,8 @@ from app.schemas import (
     CollectedContentResponse,
     ContentBulkDeleteRequest,
     ContentBulkDeleteResponse,
+    ContentBulkReanalyzeRequest,
+    ContentBulkReanalyzeResponse,
     ManualContentCreate,
 )
 
@@ -33,6 +35,27 @@ def wait_for_content_workers(db: DbSession) -> None:
     if db.get_bind().dialect.name == "postgresql":
         db.execute(text("SELECT pg_advisory_xact_lock(82429101)"))
         db.execute(text("SELECT pg_advisory_xact_lock(82429102)"))
+
+
+def reset_analysis(item: ContentItem) -> None:
+    item.analysis_status = "pending"
+    item.analysis_disposition = None
+    item.filter_reason = None
+    item.analysis_attempts = 0
+    item.testing_relevance_score = None
+    item.testing_value_score = None
+    item.analysis_summary = None
+    item.testing_value_analysis = None
+    item.applicable_scenarios = []
+    item.adoption_suggestions = []
+    item.analysis_risks = []
+    item.analysis_tags = []
+    item.related_links = []
+    item.related_links_extracted_at = None
+    item.analysis_model = None
+    item.analysis_error = None
+    item.analyzed_at = None
+    item.next_analysis_at = None
 
 
 @router.post("", response_model=CollectedContentResponse, status_code=status.HTTP_201_CREATED)
@@ -87,6 +110,9 @@ async def list_collected_content(
     limit: int = Query(default=50, ge=1, le=200),
     query: str | None = Query(default=None, min_length=1, max_length=200),
     analysis_status: Annotated[AnalysisStatus | None, Query(alias="status")] = None,
+    analysis_disposition: Annotated[
+        Literal["radar", "watch", "filtered"] | None, Query(alias="disposition")
+    ] = None,
     source_id: int | None = Query(default=None, ge=1),
     start_at: Annotated[datetime | None, Query()] = None,
     end_at: Annotated[datetime | None, Query()] = None,
@@ -108,6 +134,8 @@ async def list_collected_content(
         )
     if analysis_status is not None:
         filters.append(ContentItem.analysis_status == analysis_status)
+    if analysis_disposition is not None:
+        filters.append(ContentItem.analysis_disposition == analysis_disposition)
     if source_id is not None:
         filters.append(ContentItem.source_id == source_id)
     if start_at is not None:
@@ -120,6 +148,7 @@ async def list_collected_content(
         limit=limit,
         query=query,
         status=analysis_status,
+        disposition=analysis_disposition,
         source_id=source_id,
         start_at=start_at,
         end_at=end_at,
@@ -156,6 +185,44 @@ def delete_collected_content(
     delete_prefix_sync("content:list")
     delete_prefix_sync("content:item")
     delete_prefix_sync("collected:list")
+
+
+@router.post("/{content_id}/reanalyze", response_model=CollectedContentResponse)
+def reanalyze_collected_content(
+    content_id: int, db: DbSession, _admin: AdminUser
+) -> ContentItem:
+    wait_for_content_workers(db)
+    item = db.get(ContentItem, content_id)
+    if item is None:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Content item not found")
+    reset_analysis(item)
+    db.commit()
+    db.refresh(item)
+    delete_prefix_sync("content:list")
+    delete_prefix_sync("content:item")
+    delete_prefix_sync("collected:list")
+    return item
+
+
+@router.post("/bulk-reanalyze", response_model=ContentBulkReanalyzeResponse)
+def bulk_reanalyze_collected_content(
+    payload: ContentBulkReanalyzeRequest, db: DbSession, _admin: AdminUser
+) -> ContentBulkReanalyzeResponse:
+    wait_for_content_workers(db)
+    content_ids = list(dict.fromkeys(payload.content_ids))
+    items = list(db.scalars(select(ContentItem).where(ContentItem.id.in_(content_ids))))
+    if len(items) != len(content_ids):
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail="One or more content items were not found",
+        )
+    for item in items:
+        reset_analysis(item)
+    db.commit()
+    delete_prefix_sync("content:list")
+    delete_prefix_sync("content:item")
+    delete_prefix_sync("collected:list")
+    return ContentBulkReanalyzeResponse(reanalyzed=len(items))
 
 
 @router.post("/bulk-delete", response_model=ContentBulkDeleteResponse)

@@ -1,5 +1,5 @@
 from datetime import datetime
-from typing import Annotated
+from typing import Annotated, Literal
 
 from fastapi import APIRouter, HTTPException, Query, Response, status
 from sqlalchemy import func, or_, select
@@ -13,6 +13,7 @@ from app.reporting import render_markdown_report
 from app.schemas import ContentExportRequest, ContentItemResponse, ContentListResponse
 
 router = APIRouter(prefix="/content", tags=["content"])
+WATCH_EXPORT_THRESHOLD = 40
 
 _LIST_LOAD = (
     ContentItem.id,
@@ -23,6 +24,8 @@ _LIST_LOAD = (
     ContentItem.published_at,
     ContentItem.fetched_at,
     ContentItem.analysis_status,
+    ContentItem.analysis_disposition,
+    ContentItem.filter_reason,
     ContentItem.testing_relevance_score,
     ContentItem.testing_value_score,
     ContentItem.analysis_summary,
@@ -38,6 +41,7 @@ _LIST_LOAD = (
 
 
 def content_filters(
+    disposition: Literal["radar", "watch"],
     source_id: int | None,
     query: str | None,
     start_at: datetime | None,
@@ -46,9 +50,20 @@ def content_filters(
 ) -> list:
     filters = [
         ContentItem.analysis_status == "analyzed",
-        ContentItem.testing_relevance_score >= settings.testing_relevance_threshold,
         ContentItem.testing_value_score >= min_value_score,
     ]
+    if disposition == "radar":
+        filters.extend(
+            [
+                or_(
+                    ContentItem.analysis_disposition == "radar",
+                    ContentItem.analysis_disposition.is_(None),
+                ),
+                ContentItem.testing_relevance_score >= settings.testing_relevance_threshold,
+            ]
+        )
+    else:
+        filters.append(ContentItem.analysis_disposition == "watch")
     if source_id is not None:
         filters.append(ContentItem.source_id == source_id)
     if query is not None:
@@ -83,7 +98,12 @@ def export_content(
             .where(
                 ContentItem.id.in_(content_ids),
                 ContentItem.analysis_status == "analyzed",
-                ContentItem.testing_relevance_score >= settings.testing_relevance_threshold,
+                or_(
+                    ContentItem.analysis_disposition.in_(["radar", "watch"]),
+                    ContentItem.analysis_disposition.is_(None),
+                ),
+                ContentItem.testing_relevance_score >= WATCH_EXPORT_THRESHOLD,
+                ContentItem.testing_value_score >= WATCH_EXPORT_THRESHOLD,
             )
         )
     )
@@ -112,6 +132,7 @@ async def list_content(
     _user: CurrentUserAsync,
     offset: int = Query(default=0, ge=0),
     limit: int = Query(default=50, ge=1, le=200),
+    disposition: Literal["radar", "watch"] = "radar",
     source_id: int | None = Query(default=None, ge=1),
     query: str | None = Query(default=None, min_length=1, max_length=200),
     start_at: Annotated[datetime | None, Query()] = None,
@@ -123,12 +144,15 @@ async def list_content(
             status_code=status.HTTP_422_UNPROCESSABLE_CONTENT,
             detail="start_at must be before or equal to end_at",
         )
-    filters = content_filters(source_id, query, start_at, end_at, min_value_score)
+    filters = content_filters(
+        disposition, source_id, query, start_at, end_at, min_value_score
+    )
     key = cache_key(
         "content:list",
         order="latest",
         offset=offset,
         limit=limit,
+        disposition=disposition,
         source_id=source_id,
         query=query,
         start_at=start_at,
@@ -174,7 +198,9 @@ async def get_content(
     if (
         item is None
         or item.analysis_status != "analyzed"
-        or (item.testing_relevance_score or 0) < settings.testing_relevance_threshold
+        or item.analysis_disposition == "filtered"
+        or (item.testing_relevance_score or 0) < WATCH_EXPORT_THRESHOLD
+        or (item.testing_value_score or 0) < WATCH_EXPORT_THRESHOLD
     ):
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Content item not found")
     response = ContentItemResponse.model_validate(item)

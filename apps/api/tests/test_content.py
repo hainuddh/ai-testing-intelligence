@@ -46,6 +46,7 @@ def test_list_filter_and_get_content(client, db_session):
         summary="A practical guide",
         published_at=datetime(2026, 8, 20, tzinfo=UTC),
         analysis_status="analyzed",
+        analysis_disposition="radar",
         testing_relevance_score=85,
         testing_value_score=90,
         analysis_summary="Testing summary",
@@ -62,9 +63,21 @@ def test_list_filter_and_get_content(client, db_session):
                 title="Other article",
                 url="https://example.com/other",
                 body="Unrelated content",
-                analysis_status="filtered",
+                analysis_status="analyzed",
+                analysis_disposition="filtered",
                 testing_relevance_score=20,
                 testing_value_score=10,
+            ),
+            ContentItem(
+                source_id=second_source.id,
+                title="Agent reliability observation",
+                url="https://example.com/watch",
+                summary="An early but actionable reliability signal",
+                analysis_status="analyzed",
+                analysis_disposition="watch",
+                filter_reason="relevance_below_radar_threshold",
+                testing_relevance_score=55,
+                testing_value_score=50,
             ),
         ]
     )
@@ -103,6 +116,14 @@ def test_list_filter_and_get_content(client, db_session):
     high_value = client.get("/api/v1/content?min_value_score=95", headers=headers)
     assert high_value.status_code == 200
     assert high_value.json()["total"] == 0
+
+    watch = client.get(
+        "/api/v1/content?disposition=watch&min_value_score=40", headers=headers
+    )
+    assert watch.status_code == 200
+    assert watch.json()["total"] == 1
+    assert watch.json()["items"][0]["title"] == "Agent reliability observation"
+    assert watch.json()["items"][0]["analysis_disposition"] == "watch"
 
 
 def test_list_orders_content_by_latest_effective_time(client, db_session):

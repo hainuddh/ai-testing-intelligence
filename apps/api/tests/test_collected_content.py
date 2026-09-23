@@ -79,10 +79,21 @@ def test_collected_content_management_is_admin_only(client, db_session):
         ).status_code
         == 403
     )
+    assert (
+        client.post(
+            "/api/v1/collected-content/bulk-reanalyze",
+            headers=maintainer_headers,
+            json={"content_ids": [1]},
+        ).status_code
+        == 403
+    )
 
 def test_admin_queries_collected_content(client, db_session):
     admin, headers = add_user(db_session, "admin", "admin")
-    first_source, pending, _analyzed, _failed = add_collected_content(db_session, admin)
+    first_source, pending, analyzed, _failed = add_collected_content(db_session, admin)
+    analyzed.analysis_disposition = "watch"
+    analyzed.filter_reason = "value_below_radar_threshold"
+    db_session.commit()
 
     response = client.get(
         "/api/v1/collected-content"
@@ -98,6 +109,14 @@ def test_admin_queries_collected_content(client, db_session):
     assert item["source_name"] == "First source"
     assert item["analysis_status"] == "pending"
     assert item["analysis_error"] is None
+
+    watch = client.get(
+        "/api/v1/collected-content?disposition=watch", headers=headers
+    )
+    assert watch.status_code == 200
+    assert watch.json()["total"] == 1
+    assert watch.json()["items"][0]["analysis_disposition"] == "watch"
+    assert watch.json()["items"][0]["filter_reason"] == "value_below_radar_threshold"
 
 
 def test_maintainer_submits_manual_platform_content(client, db_session):
@@ -237,3 +256,54 @@ def test_bulk_delete_rejects_empty_or_missing_ids_atomically(client, db_session)
     assert empty.status_code == 422
     assert missing.status_code == 404
     assert db_session.get(ContentItem, pending.id) is not None
+
+
+def test_admin_reanalyzes_single_and_multiple_items(client, db_session):
+    admin, headers = add_user(db_session, "reanalyze-admin", "admin")
+    _source, pending, analyzed, failed = add_collected_content(db_session, admin)
+    analyzed.analysis_disposition = "filtered"
+    analyzed.filter_reason = "model_irrelevant"
+    analyzed.analysis_attempts = 2
+    analyzed.analysis_error = "old error"
+    analyzed.analyzed_at = datetime(2026, 8, 26, tzinfo=UTC)
+    db_session.commit()
+
+    single = client.post(
+        f"/api/v1/collected-content/{analyzed.id}/reanalyze", headers=headers
+    )
+    bulk = client.post(
+        "/api/v1/collected-content/bulk-reanalyze",
+        headers=headers,
+        json={"content_ids": [pending.id, failed.id]},
+    )
+
+    assert single.status_code == 200
+    assert single.json()["analysis_status"] == "pending"
+    assert single.json()["analysis_disposition"] is None
+    assert single.json()["filter_reason"] is None
+    assert bulk.status_code == 200
+    assert bulk.json() == {"reanalyzed": 2}
+    for content_id in (pending.id, analyzed.id, failed.id):
+        db_session.expire_all()
+        item = db_session.get(ContentItem, content_id)
+        assert item.analysis_status == "pending"
+        assert item.analysis_disposition is None
+        assert item.filter_reason is None
+        assert item.analysis_attempts == 0
+        assert item.analysis_error is None
+        assert item.analyzed_at is None
+
+
+def test_bulk_reanalyze_rejects_missing_ids_atomically(client, db_session):
+    admin, headers = add_user(db_session, "reanalyze-atomic-admin", "admin")
+    _source, pending, _analyzed, _failed = add_collected_content(db_session, admin)
+
+    response = client.post(
+        "/api/v1/collected-content/bulk-reanalyze",
+        headers=headers,
+        json={"content_ids": [pending.id, 99999]},
+    )
+
+    assert response.status_code == 404
+    db_session.refresh(pending)
+    assert pending.analysis_status == "pending"

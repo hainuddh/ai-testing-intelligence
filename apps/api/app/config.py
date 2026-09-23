@@ -18,6 +18,8 @@ class Settings(BaseSettings):
     analysis_batch_size: int = 10
     testing_relevance_threshold: int = 60
     analysis_fetch_full_content: bool = False
+    analysis_adaptive_full_content: bool = True
+    analysis_min_summary_chars: int = 240
     redis_url: str = ""
     content_cache_ttl: int = 30
     database_cache_ttl: int = 60

@@ -167,6 +167,8 @@ class ContentItemResponse(BaseModel):
     published_at: datetime | None
     fetched_at: datetime
     analysis_status: str
+    analysis_disposition: str | None = None
+    filter_reason: str | None = None
     testing_relevance_score: int | None
     testing_value_score: int | None
     analysis_summary: str | None
@@ -201,6 +203,8 @@ class CollectedContentResponse(BaseModel):
     published_at: datetime | None
     fetched_at: datetime
     analysis_status: str
+    analysis_disposition: str | None = None
+    filter_reason: str | None = None
     analysis_attempts: int
     testing_relevance_score: int | None
     testing_value_score: int | None
@@ -228,6 +232,14 @@ class ContentBulkDeleteRequest(BaseModel):
 
 class ContentBulkDeleteResponse(BaseModel):
     deleted: int
+
+
+class ContentBulkReanalyzeRequest(BaseModel):
+    content_ids: list[int] = Field(min_length=1, max_length=100)
+
+
+class ContentBulkReanalyzeResponse(BaseModel):
+    reanalyzed: int
 
 
 class DatabaseStatusResponse(BaseModel):

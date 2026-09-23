@@ -13,6 +13,7 @@ import {
   LogoutOutlined,
   PlusOutlined,
   RadarChartOutlined,
+  SyncOutlined,
   TeamOutlined,
   UnorderedListOutlined,
 } from '@ant-design/icons'
@@ -55,6 +56,8 @@ type ContentItem = {
   published_at: string | null
   fetched_at: string
   analysis_status: string
+  analysis_disposition: 'radar' | 'watch' | 'filtered' | null
+  filter_reason: string | null
   testing_relevance_score: number | null
   testing_value_score: number | null
   analysis_summary: string | null
@@ -92,6 +95,8 @@ type CollectedItem = {
   published_at: string | null
   fetched_at: string
   analysis_status: 'pending' | 'analyzed' | 'filtered' | 'failed'
+  analysis_disposition: 'radar' | 'watch' | 'filtered' | null
+  filter_reason: string | null
   analysis_attempts: number
   testing_relevance_score: number | null
   testing_value_score: number | null
@@ -106,7 +111,18 @@ type Tab = 'content' | 'sources' | 'collection' | 'users' | 'database'
 const typeLabels: Record<string, string> = { website: '网站', newsletter: '通讯', rss: 'RSS', social: '社交媒体', wechat: '微信公众号', weibo: '微博' }
 const trustLabels: Record<number, string> = { 5: '最高可信', 4: '高可信', 3: '待验证', 2: '观察中', 1: '低可信' }
 const roleLabels: Record<Role, string> = { viewer: '浏览者', maintainer: '维护者', admin: '管理员' }
-const analysisStatusLabels = { pending: '待分析', analyzed: '已入雷达', filtered: '已过滤', failed: '分析失败' }
+const analysisStatusLabels: Record<string, string> = { pending: '待分析', analyzed: '分析完成', filtered: '已过滤（旧数据）', failed: '分析失败' }
+const analysisStatusFilterOptions = ['pending', 'analyzed', 'failed'].map((value) => ({ value, label: analysisStatusLabels[value] }))
+const dispositionLabels: Record<string, string> = { radar: '主雷达', watch: '观察池', filtered: '已过滤' }
+const filterReasonLabels: Record<string, string> = {
+  model_irrelevant: '模型判定不相关',
+  relevance_below_watch_threshold: '相关度低于观察门槛',
+  value_below_watch_threshold: '测试价值低于观察门槛',
+  relevance_below_radar_threshold: '相关度未达到主雷达门槛',
+  value_below_radar_threshold: '测试价值未达到主雷达门槛',
+  missing_actionable_details: '缺少可执行场景或落地建议',
+  legacy_filtered: '历史规则过滤',
+}
 const languageOptions = [
   { value: 'zh-CN', label: '中文（简体）' },
   { value: 'zh-TW', label: '中文（繁体）' },
@@ -147,6 +163,7 @@ export default function App() {
   const [startDate, setStartDate] = useState('')
   const [endDate, setEndDate] = useState('')
   const [minValueScore, setMinValueScore] = useState(60)
+  const [contentDisposition, setContentDisposition] = useState<'radar' | 'watch'>('radar')
   const [selectedContent, setSelectedContent] = useState<ContentItem | null>(null)
   const [selectedContentIds, setSelectedContentIds] = useState<number[]>([])
   const [exporting, setExporting] = useState(false)
@@ -156,11 +173,12 @@ export default function App() {
   const [collectedPage, setCollectedPage] = useState(1)
   const [collectedQuery, setCollectedQuery] = useState('')
   const [collectedStatus, setCollectedStatus] = useState('')
+  const [collectedDisposition, setCollectedDisposition] = useState('')
   const [collectedSource, setCollectedSource] = useState('')
   const [collectedStartDate, setCollectedStartDate] = useState('')
   const [collectedEndDate, setCollectedEndDate] = useState('')
   const [selectedCollectedIds, setSelectedCollectedIds] = useState<number[]>([])
-  const [appliedCollectedFilters, setAppliedCollectedFilters] = useState({ query: '', status: '', sourceId: '', startDate: '', endDate: '' })
+  const [appliedCollectedFilters, setAppliedCollectedFilters] = useState({ query: '', status: '', disposition: '', sourceId: '', startDate: '', endDate: '' })
   const collectedRequestId = useRef(0)
   const contentRequestId = useRef(0)
   const contentCache = useRef<Map<string, { items: ContentItem[]; total: number; ts: number }>>(new Map())
@@ -234,11 +252,12 @@ export default function App() {
     return () => { active = false }
   }, [token])
 
-  const loadContent = async (page = contentPage, search = query, start = startDate, end = endDate, valueScore = minValueScore) => {
+  const loadContent = async (page = contentPage, search = query, start = startDate, end = endDate, valueScore = minValueScore, disposition = contentDisposition) => {
     const params = new URLSearchParams({ offset: String((page - 1) * 12), limit: '12' })
     if (search) params.set('query', search)
     if (start) params.set('start_at', dateBoundary(start))
     if (end) params.set('end_at', dateBoundary(end, true))
+    if (disposition === 'watch') params.set('disposition', disposition)
     if (valueScore) params.set('min_value_score', String(valueScore))
     const cacheKey = params.toString()
     const hit = contentCache.current.get(cacheKey)
@@ -357,6 +376,7 @@ export default function App() {
       const params = new URLSearchParams({ offset: String((page - 1) * 20), limit: '20' })
       if (filters.query) params.set('query', filters.query)
       if (filters.status) params.set('status', filters.status)
+      if (filters.disposition) params.set('disposition', filters.disposition)
       if (filters.sourceId) params.set('source_id', filters.sourceId)
       if (filters.startDate) params.set('start_at', dateBoundary(filters.startDate))
       if (filters.endDate) params.set('end_at', dateBoundary(filters.endDate, true))
@@ -401,6 +421,25 @@ export default function App() {
       await loadCollectedContent(nextPage)
     } catch (requestError) {
       setError(requestError instanceof Error ? requestError.message : '删除采集内容失败')
+    }
+  }
+
+  const reanalyzeCollectedItems = async (ids: number[]) => {
+    setSaving(true)
+    setError('')
+    try {
+      await request('/api/v1/collected-content/bulk-reanalyze', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ content_ids: ids }),
+      })
+      contentCache.current.clear()
+      setSelectedCollectedIds([])
+      await loadCollectedContent(collectedPage)
+    } catch (requestError) {
+      setError(requestError instanceof Error ? requestError.message : '重新分析失败')
+    } finally {
+      setSaving(false)
     }
   }
 
@@ -665,9 +704,9 @@ export default function App() {
       </nav>
       <section className="dashboard-content">
         {error && <Alert className="dashboard-alert" type="error" title={error} showIcon closable onClose={() => setError('')} />}
-        {tab === 'content' && <ContentView items={content} total={contentTotal} page={contentPage} loading={loading} query={query} startDate={startDate} endDate={endDate} minValueScore={minValueScore} selectedIds={selectedContentIds} exporting={exporting} onQuery={setQuery} onStartDate={setStartDate} onEndDate={setEndDate} onMinValueScore={setMinValueScore} onOpen={setSelectedContent} onToggleSelection={toggleContentSelection} onToggleCurrentPage={toggleCurrentPageSelection} onClearSelection={() => setSelectedContentIds([])} onExport={() => void exportSelectedContent()} onSearch={() => { setSelectedContentIds([]); setContentPage(1); void loadContent(1, query) }} onReset={() => { setSelectedContentIds([]); setQuery(''); setStartDate(''); setEndDate(''); setMinValueScore(60); setContentPage(1); void loadContent(1, '', '', '', 60) }} onPage={(page) => { setContentPage(page); void loadContent(page) }} />}
+        {tab === 'content' && <ContentView items={content} total={contentTotal} page={contentPage} loading={loading} query={query} startDate={startDate} endDate={endDate} minValueScore={minValueScore} disposition={contentDisposition} selectedIds={selectedContentIds} exporting={exporting} onQuery={setQuery} onStartDate={setStartDate} onEndDate={setEndDate} onMinValueScore={setMinValueScore} onDisposition={(value) => { const nextScore = value === 'watch' ? 40 : 60; setContentDisposition(value); setMinValueScore(nextScore); setSelectedContentIds([]); setContentPage(1); void loadContent(1, query, startDate, endDate, nextScore, value) }} onOpen={setSelectedContent} onToggleSelection={toggleContentSelection} onToggleCurrentPage={toggleCurrentPageSelection} onClearSelection={() => setSelectedContentIds([])} onExport={() => void exportSelectedContent()} onSearch={() => { setSelectedContentIds([]); setContentPage(1); void loadContent(1, query) }} onReset={() => { setSelectedContentIds([]); setQuery(''); setStartDate(''); setEndDate(''); setMinValueScore(60); setContentDisposition('radar'); setContentPage(1); void loadContent(1, '', '', '', 60, 'radar') }} onPage={(page) => { setContentPage(page); void loadContent(page) }} />}
         {tab === 'sources' && <SourcesView sources={sources} total={sourceTotal} loading={loading} canManage={canManageSources} canDelete={isAdmin} onAdd={() => openSource()} onDiscover={openDiscovery} onManualContent={openManualContent} onEndpoints={(source) => void openEndpoints(source)} onEdit={openSource} onDelete={(source) => Modal.confirm({ title: `删除信源「${source.name}」？`, content: '删除后无法恢复，并会清除关联内容。', okText: '确认删除', cancelText: '取消', okButtonProps: { danger: true }, onOk: () => removeSource(source) })} />}
-        {tab === 'collection' && isAdmin && <CollectedContentView items={collectedItems} total={collectedTotal} page={collectedPage} loading={loading} sources={sources} query={collectedQuery} status={collectedStatus} sourceId={collectedSource} startDate={collectedStartDate} endDate={collectedEndDate} selectedIds={selectedCollectedIds} onQuery={setCollectedQuery} onStatus={setCollectedStatus} onSource={setCollectedSource} onStartDate={setCollectedStartDate} onEndDate={setCollectedEndDate} onToggle={(id) => setSelectedCollectedIds((current) => { if (current.includes(id)) return current.filter((value) => value !== id); if (current.length >= 100) { setError('单次最多删除 100 条采集内容'); return current } return [...current, id] })} onTogglePage={() => { const pageIds = collectedItems.map((item) => item.id); const all = pageIds.every((id) => selectedCollectedIds.includes(id)); setSelectedCollectedIds((current) => { if (all) return current.filter((id) => !pageIds.includes(id)); const additions = pageIds.filter((id) => !current.includes(id)); const available = 100 - current.length; if (additions.length > available) setError('单次最多删除 100 条采集内容'); return [...current, ...additions.slice(0, available)] }) }} onApply={() => { const filters = { query: collectedQuery, status: collectedStatus, sourceId: collectedSource, startDate: collectedStartDate, endDate: collectedEndDate }; setAppliedCollectedFilters(filters); setSelectedCollectedIds([]); setCollectedPage(1); void loadCollectedContent(1, filters) }} onReset={() => { const filters = { query: '', status: '', sourceId: '', startDate: '', endDate: '' }; setCollectedQuery(''); setCollectedStatus(''); setCollectedSource(''); setCollectedStartDate(''); setCollectedEndDate(''); setAppliedCollectedFilters(filters); setSelectedCollectedIds([]); setCollectedPage(1); void loadCollectedContent(1, filters) }} onPage={(page) => { setCollectedPage(page); void loadCollectedContent(page, appliedCollectedFilters) }} onDelete={(ids) => Modal.confirm({ title: `删除 ${ids.length} 条采集内容？`, content: '删除后原始采集记录和分析结果均无法恢复。', okText: '确认删除', cancelText: '取消', okButtonProps: { danger: true }, onOk: () => deleteCollectedItems(ids) })} />}
+        {tab === 'collection' && isAdmin && <CollectedContentView items={collectedItems} total={collectedTotal} page={collectedPage} loading={loading} saving={saving} sources={sources} query={collectedQuery} status={collectedStatus} disposition={collectedDisposition} sourceId={collectedSource} startDate={collectedStartDate} endDate={collectedEndDate} selectedIds={selectedCollectedIds} onQuery={setCollectedQuery} onStatus={setCollectedStatus} onDisposition={setCollectedDisposition} onSource={setCollectedSource} onStartDate={setCollectedStartDate} onEndDate={setCollectedEndDate} onToggle={(id) => setSelectedCollectedIds((current) => { if (current.includes(id)) return current.filter((value) => value !== id); if (current.length >= 100) { setError('单次最多处理 100 条采集内容'); return current } return [...current, id] })} onTogglePage={() => { const pageIds = collectedItems.map((item) => item.id); const all = pageIds.every((id) => selectedCollectedIds.includes(id)); setSelectedCollectedIds((current) => { if (all) return current.filter((id) => !pageIds.includes(id)); const additions = pageIds.filter((id) => !current.includes(id)); const available = 100 - current.length; if (additions.length > available) setError('单次最多处理 100 条采集内容'); return [...current, ...additions.slice(0, available)] }) }} onApply={() => { const filters = { query: collectedQuery, status: collectedStatus, disposition: collectedDisposition, sourceId: collectedSource, startDate: collectedStartDate, endDate: collectedEndDate }; setAppliedCollectedFilters(filters); setSelectedCollectedIds([]); setCollectedPage(1); void loadCollectedContent(1, filters) }} onReset={() => { const filters = { query: '', status: '', disposition: '', sourceId: '', startDate: '', endDate: '' }; setCollectedQuery(''); setCollectedStatus(''); setCollectedDisposition(''); setCollectedSource(''); setCollectedStartDate(''); setCollectedEndDate(''); setAppliedCollectedFilters(filters); setSelectedCollectedIds([]); setCollectedPage(1); void loadCollectedContent(1, filters) }} onPage={(page) => { setCollectedPage(page); void loadCollectedContent(page, appliedCollectedFilters) }} onReanalyze={(ids) => Modal.confirm({ title: `重新分析 ${ids.length} 条内容？`, content: '现有评分和结论会被清空，内容将重新进入分析队列。', okText: '确认重新分析', cancelText: '取消', onOk: () => reanalyzeCollectedItems(ids) })} onDelete={(ids) => Modal.confirm({ title: `删除 ${ids.length} 条采集内容？`, content: '删除后原始采集记录和分析结果均无法恢复。', okText: '确认删除', cancelText: '取消', okButtonProps: { danger: true }, onOk: () => deleteCollectedItems(ids) })} />}
         {tab === 'users' && isAdmin && <UsersView users={users} loading={loading} me={me} onAdd={() => openUser()} onEdit={openUser} onDelete={(user) => Modal.confirm({ title: `删除用户「${user.username}」？`, content: '该用户将立即失去访问权限。', okText: '确认删除', cancelText: '取消', okButtonProps: { danger: true }, onOk: () => removeUser(user) })} />}
         {tab === 'database' && isAdmin && <DatabaseView data={database} loading={loading} />}
       </section>
@@ -704,11 +743,11 @@ function PageIntro({ kicker, title, copy, action, compact = false }: { kicker: s
   return <div className={`page-intro${compact ? ' compact' : ''}`}><div><span className="eyebrow">{kicker}</span><h1>{title}</h1><p>{copy}</p></div>{action}</div>
 }
 
-function ContentView({ items, total, page, loading, query, startDate, endDate, minValueScore, selectedIds, exporting, onQuery, onStartDate, onEndDate, onMinValueScore, onOpen, onToggleSelection, onToggleCurrentPage, onClearSelection, onExport, onSearch, onReset, onPage }: { items: ContentItem[]; total: number; page: number; loading: boolean; query: string; startDate: string; endDate: string; minValueScore: number; selectedIds: number[]; exporting: boolean; onQuery: (value: string) => void; onStartDate: (value: string) => void; onEndDate: (value: string) => void; onMinValueScore: (value: number) => void; onOpen: (item: ContentItem) => void; onToggleSelection: (id: number) => void; onToggleCurrentPage: () => void; onClearSelection: () => void; onExport: () => void; onSearch: () => void; onReset: () => void; onPage: (page: number) => void }) {
+function ContentView({ items, total, page, loading, query, startDate, endDate, minValueScore, disposition, selectedIds, exporting, onQuery, onStartDate, onEndDate, onMinValueScore, onDisposition, onOpen, onToggleSelection, onToggleCurrentPage, onClearSelection, onExport, onSearch, onReset, onPage }: { items: ContentItem[]; total: number; page: number; loading: boolean; query: string; startDate: string; endDate: string; minValueScore: number; disposition: 'radar' | 'watch'; selectedIds: number[]; exporting: boolean; onQuery: (value: string) => void; onStartDate: (value: string) => void; onEndDate: (value: string) => void; onMinValueScore: (value: number) => void; onDisposition: (value: 'radar' | 'watch') => void; onOpen: (item: ContentItem) => void; onToggleSelection: (id: number) => void; onToggleCurrentPage: () => void; onClearSelection: () => void; onExport: () => void; onSearch: () => void; onReset: () => void; onPage: (page: number) => void }) {
   const [viewMode, setViewMode] = useState<'compact' | 'card'>('compact')
   const [advancedFiltersOpen, setAdvancedFiltersOpen] = useState(Boolean(startDate || endDate))
   const pageSelected = items.length > 0 && items.every((item) => selectedIds.includes(item.id))
-  const hasFilters = Boolean(query || startDate || endDate || minValueScore !== 60)
+  const hasFilters = Boolean(query || startDate || endDate || minValueScore !== 60 || disposition !== 'radar')
   const advancedFilterCount = Number(Boolean(startDate)) + Number(Boolean(endDate))
 
   return <>
@@ -716,6 +755,7 @@ function ContentView({ items, total, page, loading, query, startDate, endDate, m
     <div className="feed-tools">
       <div className="feed-toolbar">
         <Input.Search value={query} onChange={(event) => onQuery(event.target.value)} onSearch={onSearch} enterButton="检索" placeholder="检索标题、摘要或正文" aria-label="检索内容" />
+        <label className="value-filter"><span>情报分层</span><Select aria-label="情报分层" value={disposition} onChange={onDisposition} options={[{ value: 'radar', label: '主雷达' }, { value: 'watch', label: '观察池' }]} /></label>
         <label className="value-filter"><span>最低价值</span><Select aria-label="最低测试价值" value={minValueScore} onChange={onMinValueScore} options={[{ value: 40, label: '观察 40+' }, { value: 60, label: '推荐 60+' }, { value: 80, label: '高价值 80+' }]} /></label>
         <Button aria-label="更多筛选" aria-expanded={advancedFiltersOpen} icon={<FilterOutlined />} onClick={() => setAdvancedFiltersOpen((open) => !open)}>更多筛选{advancedFilterCount > 0 ? ` (${advancedFilterCount})` : ''}</Button>
         <Button type="primary" onClick={onSearch}>应用</Button>
@@ -746,7 +786,7 @@ function ContentView({ items, total, page, loading, query, startDate, endDate, m
       {loading && <div className="refresh-indicator" role="status" aria-label="正在更新情报列表"><Spin size="small" /><span>正在更新情报列表，现有内容仍可浏览</span></div>}
       <div className={`content-grid ${viewMode === 'compact' ? 'compact-view' : 'card-view'}`} role="list" aria-label="情报列表">{items.map((item) => <article className={`content-card ${selectedIds.includes(item.id) ? 'selected' : ''}`} role="listitem" key={item.id}>
         <span className="card-selector" onClick={(event) => event.stopPropagation()} onKeyDown={(event) => event.stopPropagation()}><Checkbox checked={selectedIds.includes(item.id)} onChange={() => onToggleSelection(item.id)} aria-label={`选择 ${item.title}`} /></span>
-        <div className="content-meta"><span>{dateText(item.published_at || item.fetched_at)}</span><span>{item.source_name}</span></div>
+        <div className="content-meta"><span>{dateText(item.published_at || item.fetched_at)}</span><span>{item.source_name}</span>{item.analysis_disposition === 'watch' && <Tag className="status-watch">观察池</Tag>}</div>
         <div className="score-line"><Tag className="score-relevance">相关 {item.testing_relevance_score ?? 0}</Tag><Tag className={(item.testing_value_score ?? 0) >= 80 ? 'score-value high' : 'score-value'}>价值 {item.testing_value_score ?? 0}</Tag></div>
         <h2><button type="button" onClick={(event) => { event.stopPropagation(); onOpen(item) }}>{item.title}</button></h2>
         <p>{item.analysis_summary || '等待测试价值摘要'}</p><button className="read-link" type="button" onClick={() => onOpen(item)}>查看详情 <ArrowRightOutlined /></button>
@@ -811,27 +851,28 @@ function SourceDiscoveryDrawer({ open, discovery, form, saving, onClose, onDisco
   </Drawer>
 }
 
-function CollectedContentView({ items, total, page, loading, sources, query, status, sourceId, startDate, endDate, selectedIds, onQuery, onStatus, onSource, onStartDate, onEndDate, onToggle, onTogglePage, onApply, onReset, onPage, onDelete }: { items: CollectedItem[]; total: number; page: number; loading: boolean; sources: Source[]; query: string; status: string; sourceId: string; startDate: string; endDate: string; selectedIds: number[]; onQuery: (value: string) => void; onStatus: (value: string) => void; onSource: (value: string) => void; onStartDate: (value: string) => void; onEndDate: (value: string) => void; onToggle: (id: number) => void; onTogglePage: () => void; onApply: () => void; onReset: () => void; onPage: (page: number) => void; onDelete: (ids: number[]) => void }) {
+function CollectedContentView({ items, total, page, loading, saving, sources, query, status, disposition, sourceId, startDate, endDate, selectedIds, onQuery, onStatus, onDisposition, onSource, onStartDate, onEndDate, onToggle, onTogglePage, onApply, onReset, onPage, onReanalyze, onDelete }: { items: CollectedItem[]; total: number; page: number; loading: boolean; saving: boolean; sources: Source[]; query: string; status: string; disposition: string; sourceId: string; startDate: string; endDate: string; selectedIds: number[]; onQuery: (value: string) => void; onStatus: (value: string) => void; onDisposition: (value: string) => void; onSource: (value: string) => void; onStartDate: (value: string) => void; onEndDate: (value: string) => void; onToggle: (id: number) => void; onTogglePage: () => void; onApply: () => void; onReset: () => void; onPage: (page: number) => void; onReanalyze: (ids: number[]) => void; onDelete: (ids: number[]) => void }) {
   const pageSelected = items.length > 0 && items.every((item) => selectedIds.includes(item.id))
-  const hasFilters = query || status || sourceId || startDate || endDate
+  const hasFilters = query || status || disposition || sourceId || startDate || endDate
   const [selectedItem, setSelectedItem] = useState<CollectedItem | null>(null)
   return <>
     <PageIntro kicker="COLLECTION ARCHIVE / ADMIN" title="采集管理" copy="管理自动采集的全部原始信息，包括待分析、已入雷达、已过滤和失败内容。" />
     <div className="collection-tools">
       <Input.Search value={query} onChange={(event) => onQuery(event.target.value)} onSearch={onApply} enterButton="查询" placeholder="查询标题或摘要" aria-label="查询采集内容" />
-      <Select value={status} onChange={onStatus} options={[{ value: '', label: '全部状态' }, ...Object.entries(analysisStatusLabels).map(([value, label]) => ({ value, label }))]} aria-label="采集分析状态" />
+      <Select value={status} onChange={onStatus} options={[{ value: '', label: '全部状态' }, ...analysisStatusFilterOptions]} aria-label="采集分析状态" />
+      <Select value={disposition} onChange={onDisposition} options={[{ value: '', label: '全部分层' }, ...Object.entries(dispositionLabels).map(([value, label]) => ({ value, label }))]} aria-label="采集内容分层" />
       <Select value={sourceId} onChange={onSource} options={[{ value: '', label: '全部信源' }, ...sources.map((source) => ({ value: String(source.id), label: source.name }))]} aria-label="采集信源" />
       <label>开始日期<input type="date" value={startDate} max={endDate || undefined} onChange={(event) => onStartDate(event.target.value)} /></label>
       <label>结束日期<input type="date" value={endDate} min={startDate || undefined} onChange={(event) => onEndDate(event.target.value)} /></label>
       <Button onClick={onApply}>应用筛选</Button>{hasFilters && <Button type="text" onClick={onReset}>重置</Button>}
     </div>
-    <div className="collection-actions"><Checkbox checked={pageSelected} indeterminate={!pageSelected && items.some((item) => selectedIds.includes(item.id))} onChange={onTogglePage}>全选当前页</Checkbox><span>共 {total} 条，已选择 {selectedIds.length} 条</span><Button danger icon={<DeleteOutlined />} disabled={selectedIds.length === 0} onClick={() => onDelete(selectedIds)} aria-label={`批量删除 (${selectedIds.length})`}>批量删除 ({selectedIds.length})</Button></div>
+    <div className="collection-actions"><Checkbox checked={pageSelected} indeterminate={!pageSelected && items.some((item) => selectedIds.includes(item.id))} onChange={onTogglePage}>全选当前页</Checkbox><span>共 {total} 条，已选择 {selectedIds.length} 条</span><Button icon={<SyncOutlined />} disabled={selectedIds.length === 0} loading={saving} onClick={() => onReanalyze(selectedIds)} aria-label={`重新分析 (${selectedIds.length})`}>重新分析 ({selectedIds.length})</Button><Button danger icon={<DeleteOutlined />} disabled={selectedIds.length === 0} onClick={() => onDelete(selectedIds)} aria-label={`批量删除 (${selectedIds.length})`}>批量删除 ({selectedIds.length})</Button></div>
     {loading ? <Loading text="正在读取采集档案..." /> : items.length === 0 ? <Empty icon={<InboxOutlined />} title="暂无采集内容" /> : <div className="collection-table" role="table" aria-label="采集内容列表">
       <div className="collection-row collection-head" role="row"><span>选择</span><span>内容</span><span>状态</span><span>评分</span><span>采集时间</span><span>操作</span></div>
       {items.map((item) => <div className="collection-row" role="row" key={item.id}>
         <Checkbox checked={selectedIds.includes(item.id)} onChange={() => onToggle(item.id)} aria-label={`选择采集内容 ${item.title}`} />
-        <div className="collection-title"><button type="button" onClick={() => setSelectedItem(item)}>{item.title}</button><small>{item.source_name}</small>{item.analysis_error && <em title={item.analysis_error}>{item.analysis_error}</em>}</div>
-        <Tag className={`collection-status status-${item.analysis_status}`}>{analysisStatusLabels[item.analysis_status]}</Tag>
+        <div className="collection-title"><button type="button" onClick={() => setSelectedItem(item)}>{item.title}</button><small>{item.source_name}</small>{item.filter_reason && <em>{filterReasonLabels[item.filter_reason] ?? item.filter_reason}</em>}{item.analysis_error && <em title={item.analysis_error}>{item.analysis_error}</em>}</div>
+        <Tag className={`collection-status status-${item.analysis_disposition ?? item.analysis_status}`}>{item.analysis_disposition ? dispositionLabels[item.analysis_disposition] : analysisStatusLabels[item.analysis_status]}</Tag>
         <span className="collection-score" data-label="相关/价值">{item.testing_relevance_score ?? '-'} / {item.testing_value_score ?? '-'}</span>
         <time className="collection-time" data-label="采集时间">{dateText(item.fetched_at)}</time>
         <Button type="text" danger icon={<DeleteOutlined />} aria-label={`删除采集内容 ${item.title}`} onClick={() => onDelete([item.id])} />
@@ -847,8 +888,9 @@ function CollectedContentModal({ item, onClose }: { item: CollectedItem | null; 
   return <Modal className="intel-modal collected-modal" width={760} open title={null} footer={null} onCancel={onClose}>
     <div className="intel-kicker">COLLECTED CONTENT / #{item.id}</div>
     <h2>{item.title}</h2>
-    <div className="intel-meta"><span>{item.source_name}</span><Tag className={`status-${item.analysis_status}`}>{analysisStatusLabels[item.analysis_status]}</Tag><span>相关性 {item.testing_relevance_score ?? '-'}</span><span>价值 {item.testing_value_score ?? '-'}</span></div>
+    <div className="intel-meta"><span>{item.source_name}</span><Tag className={`status-${item.analysis_disposition ?? item.analysis_status}`}>{item.analysis_disposition ? dispositionLabels[item.analysis_disposition] : analysisStatusLabels[item.analysis_status]}</Tag><span>相关性 {item.testing_relevance_score ?? '-'}</span><span>价值 {item.testing_value_score ?? '-'}</span></div>
     <section className="intel-section"><h3>原始摘要</h3><p>{item.summary || '暂无摘要'}</p></section>
+    {item.filter_reason && <section className="intel-section"><h3>分层原因</h3><p>{filterReasonLabels[item.filter_reason] ?? item.filter_reason}</p></section>}
     {item.related_links && item.related_links.length > 0 && <section className="intel-section related-links"><h3>相关链接</h3><ul>{item.related_links.map((link) => <li key={link.url}><a href={link.url} target="_blank" rel="noreferrer">{link.title} <ArrowRightOutlined /></a></li>)}</ul></section>}
     <div className="collected-detail-grid"><div><span>发布时间</span><strong>{dateTimeText(item.published_at)}</strong></div><div><span>采集时间</span><strong>{dateTimeText(item.fetched_at)}</strong></div><div><span>分析时间</span><strong>{dateTimeText(item.analyzed_at)}</strong></div><div><span>分析次数</span><strong>{item.analysis_attempts}</strong></div></div>
     {item.analysis_error && <section className="intel-section collected-error"><h3>失败原因</h3><p>{item.analysis_error}</p></section>}

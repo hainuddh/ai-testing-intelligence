@@ -65,6 +65,7 @@ describe('management radar workflow', () => {
       .mockResolvedValueOnce(json({ items: [item], total: 1 }))
       .mockResolvedValueOnce(json({ items: [item], total: 1 }))
       .mockResolvedValueOnce(json({ items: [item], total: 1 }))
+      .mockResolvedValueOnce(json({ items: [item], total: 1 }))
 
     render(<App />)
     expect(await screen.findByText('Agents gain new tools')).toBeInTheDocument()
@@ -79,12 +80,19 @@ describe('management radar workflow', () => {
     expect(document.querySelector('.content-grid')).toHaveClass('card-view')
     await userEvent.click(screen.getByRole('button', { name: '紧凑列表' }))
 
+    await userEvent.click(screen.getByLabelText('情报分层'))
+    await userEvent.click(await screen.findByText('观察池'))
+    await waitFor(() => expect(fetchMock).toHaveBeenLastCalledWith(
+      '/api/v1/content?offset=0&limit=12&disposition=watch&min_value_score=40',
+      expect.objectContaining({ headers: expect.objectContaining({ Authorization: 'Bearer existing-token' }) }),
+    ))
+
     const search = screen.getByLabelText('检索内容')
     await userEvent.type(search, 'agents')
     await userEvent.type(search, '{Enter}')
 
     await waitFor(() => expect(fetchMock).toHaveBeenLastCalledWith(
-      '/api/v1/content?offset=0&limit=12&query=agents&min_value_score=60',
+      '/api/v1/content?offset=0&limit=12&query=agents&disposition=watch&min_value_score=40',
       expect.objectContaining({ headers: expect.objectContaining({ Authorization: 'Bearer existing-token' }) }),
     ))
 
@@ -340,6 +348,49 @@ describe('management radar workflow', () => {
       body: JSON.stringify({ content_ids: [11, 12] }),
     }))
     expect(await screen.findByText('暂无采集内容')).toBeInTheDocument()
+  })
+
+  it('shows filter reasons and lets an admin reanalyze selected content', async () => {
+    localStorage.setItem('access_token', 'admin-token')
+    const user = userEvent.setup()
+    const filtered = {
+      id: 21, source_id: 1, source_name: 'General AI News', title: 'Agent architecture update',
+      url: 'https://example.com/21', summary: 'A potentially useful agent update',
+      published_at: null, fetched_at: '2026-09-20T00:00:00Z', analysis_status: 'analyzed',
+      analysis_disposition: 'filtered', filter_reason: 'model_irrelevant', analysis_attempts: 1,
+      testing_relevance_score: 20, testing_value_score: 10, analysis_error: null,
+      analyzed_at: '2026-09-20T01:00:00Z',
+    }
+    const pending = {
+      ...filtered, analysis_status: 'pending', analysis_disposition: null, filter_reason: null,
+      analysis_attempts: 0, testing_relevance_score: null, testing_value_score: null,
+      analyzed_at: null,
+    }
+    const fetchMock = vi.spyOn(globalThis, 'fetch')
+      .mockResolvedValueOnce(json({ id: 1, username: 'root', role: 'admin' }))
+      .mockResolvedValueOnce(json({ items: [], total: 0 }))
+      .mockResolvedValueOnce(json({ items: [filtered], total: 1 }))
+      .mockResolvedValueOnce(json({ items: [source], total: 1 }))
+      .mockResolvedValueOnce(json({ reanalyzed: 1 }))
+      .mockResolvedValueOnce(json({ items: [pending], total: 1 }))
+
+    render(<App />)
+    await screen.findByRole('heading', { name: '内容情报' })
+    await user.click(screen.getByRole('button', { name: '采集管理' }))
+    expect(await screen.findByText('模型判定不相关')).toBeInTheDocument()
+    await user.click(screen.getByLabelText('选择采集内容 Agent architecture update'))
+    await user.click(screen.getByRole('button', { name: '重新分析 (1)' }))
+    await user.click(await screen.findByRole('button', { name: '确认重新分析' }))
+
+    await waitFor(() => expect(fetchMock).toHaveBeenCalledWith(
+      '/api/v1/collected-content/bulk-reanalyze',
+      {
+        method: 'POST',
+        headers: { Authorization: 'Bearer admin-token', 'Content-Type': 'application/json' },
+        body: JSON.stringify({ content_ids: [21] }),
+      },
+    ))
+    expect(await screen.findByText('待分析')).toBeInTheDocument()
   })
 
   it('shows backend conflict detail when creating a duplicate user', async () => {
