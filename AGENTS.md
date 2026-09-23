@@ -38,4 +38,5 @@ AI 测试情报雷达（Signal Atlas / 技术情报雷达）—— 智能测试�
 - 预览需同时起后端(8000)与前端(5000)，否则前端 API 请求失败。
 - 部署 run 阶段禁止用 `npx serve` 之类需现场下载的命令：veFaaS 启动超时 30s，`npx serve` 下载包会超时被杀（已改用零依赖 `scripts/static-server.mjs`）。此环境 `fuser -k` 可能杀不掉进程，必要时按 `ss -lptn` 的 pid 直接 kill。
 - **veFaaS 部署面只有前端静态产物，没有后端 API**：`static-server.mjs` 对 `/api/*` 返回 502 JSON（明确提示），不走 SPA fallback——否则 index.html 冒充 JSON 会造成前端 `Unexpected token '<', "<!DOCTYPE "...` 报错。登录等完整功能只在预览环境（预览进程齐活）或 Docker Compose 自托管下可用。
+- **部署成功必须做版本三点核验**：不能只以构建或部署命令退出码为准；发布后必须同时核对服务器 Git 提交号、Web 容器内 `index.html` 引用的静态资源哈希、浏览器实际加载的资源哈希。纯前端更新需重新构建并替换 `web` 容器，仅重启旧容器或只执行 run 阶段可能继续使用旧 `dist`；浏览器最后再做一次强制刷新验证。
 - 沙箱重启后预览前后端进程会全部丢失（5000/8000 无监听），重新执行 `scripts/preview-run.sh` 即可恢复。

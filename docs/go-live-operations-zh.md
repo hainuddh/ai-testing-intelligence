@@ -505,3 +505,6 @@ df -h / /var/lib/docker
 - 磁盘有足够可用空间；
 - acme.sh DNS-01 正式证书已安装，线上序列号与磁盘证书一致，root Cron存在；
 - Redis 缓存可达：`docker compose exec api python -c "from app.cache import get_json; import asyncio; print(asyncio.run(get_json('health:check')))"` 不报错即可（返回 `None` 正常，Redis 可达且降级未触发即算通过）。
+- 服务器 `git rev-parse HEAD` 与目标发布提交一致；
+- `docker compose exec -T web cat /usr/share/nginx/html/index.html` 中的 JS/CSS 哈希与本次构建产物一致；
+- 使用浏览器开发者工具或无痕窗口确认实际加载的是同一组静态资源哈希，而不是旧缓存。仅有部署命令成功不能作为上线完成依据。

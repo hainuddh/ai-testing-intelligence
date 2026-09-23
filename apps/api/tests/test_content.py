@@ -105,6 +105,63 @@ def test_list_filter_and_get_content(client, db_session):
     assert high_value.json()["total"] == 0
 
 
+def test_list_orders_content_by_latest_effective_time(client, db_session):
+    user, headers = user_headers(db_session)
+    source = Source(
+        name="Chronological source",
+        source_type="blog",
+        languages=["en"],
+        topics=["testing"],
+        created_by=user.id,
+    )
+    db_session.add(source)
+    db_session.flush()
+    db_session.add_all(
+        [
+            ContentItem(
+                source_id=source.id,
+                title="Older high-value intelligence",
+                url="https://example.com/older-high-value",
+                published_at=datetime(2026, 8, 1, tzinfo=UTC),
+                fetched_at=datetime(2026, 8, 2, tzinfo=UTC),
+                analysis_status="analyzed",
+                testing_relevance_score=99,
+                testing_value_score=99,
+            ),
+            ContentItem(
+                source_id=source.id,
+                title="Latest published intelligence",
+                url="https://example.com/latest-published",
+                published_at=datetime(2026, 9, 20, tzinfo=UTC),
+                fetched_at=datetime(2026, 9, 21, tzinfo=UTC),
+                analysis_status="analyzed",
+                testing_relevance_score=80,
+                testing_value_score=70,
+            ),
+            ContentItem(
+                source_id=source.id,
+                title="Latest fetched intelligence",
+                url="https://example.com/latest-fetched",
+                published_at=None,
+                fetched_at=datetime(2026, 9, 22, tzinfo=UTC),
+                analysis_status="analyzed",
+                testing_relevance_score=75,
+                testing_value_score=65,
+            ),
+        ]
+    )
+    db_session.commit()
+
+    response = client.get("/api/v1/content", headers=headers)
+
+    assert response.status_code == 200
+    assert [item["title"] for item in response.json()["items"]] == [
+        "Latest fetched intelligence",
+        "Latest published intelligence",
+        "Older high-value intelligence",
+    ]
+
+
 def test_export_selected_content_as_markdown(client, db_session):
     user, headers = user_headers(db_session)
     source = Source(

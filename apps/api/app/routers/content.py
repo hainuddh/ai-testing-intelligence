@@ -126,6 +126,7 @@ async def list_content(
     filters = content_filters(source_id, query, start_at, end_at, min_value_score)
     key = cache_key(
         "content:list",
+        order="latest",
         offset=offset,
         limit=limit,
         source_id=source_id,
@@ -142,7 +143,7 @@ async def list_content(
         .options(selectinload(ContentItem.source), defer(ContentItem.body))
         .where(*filters)
         .order_by(
-            ContentItem.testing_value_score.desc(),
+            func.coalesce(ContentItem.published_at, ContentItem.fetched_at).desc(),
             ContentItem.fetched_at.desc(),
             ContentItem.id.desc(),
         )

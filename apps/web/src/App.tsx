@@ -700,8 +700,8 @@ function Login({ error, loading, onLogin }: { error: string; loading: boolean; o
   </main>
 }
 
-function PageIntro({ kicker, title, copy, action }: { kicker: string; title: string; copy: string; action?: React.ReactNode }) {
-  return <div className="page-intro"><div><span className="eyebrow">{kicker}</span><h1>{title}</h1><p>{copy}</p></div>{action}</div>
+function PageIntro({ kicker, title, copy, action, compact = false }: { kicker: string; title: string; copy: string; action?: React.ReactNode; compact?: boolean }) {
+  return <div className={`page-intro${compact ? ' compact' : ''}`}><div><span className="eyebrow">{kicker}</span><h1>{title}</h1><p>{copy}</p></div>{action}</div>
 }
 
 function ContentView({ items, total, page, loading, query, startDate, endDate, minValueScore, selectedIds, exporting, onQuery, onStartDate, onEndDate, onMinValueScore, onOpen, onToggleSelection, onToggleCurrentPage, onClearSelection, onExport, onSearch, onReset, onPage }: { items: ContentItem[]; total: number; page: number; loading: boolean; query: string; startDate: string; endDate: string; minValueScore: number; selectedIds: number[]; exporting: boolean; onQuery: (value: string) => void; onStartDate: (value: string) => void; onEndDate: (value: string) => void; onMinValueScore: (value: number) => void; onOpen: (item: ContentItem) => void; onToggleSelection: (id: number) => void; onToggleCurrentPage: () => void; onClearSelection: () => void; onExport: () => void; onSearch: () => void; onReset: () => void; onPage: (page: number) => void }) {
@@ -712,7 +712,7 @@ function ContentView({ items, total, page, loading, query, startDate, endDate, m
   const advancedFilterCount = Number(Boolean(startDate)) + Number(Boolean(endDate))
 
   return <>
-    <PageIntro kicker="INTELLIGENCE FEED / LIVE" title="内容情报" copy="聚合监听网络中的最新信号，快速定位值得跟进的变化。" />
+    <PageIntro compact kicker="实时更新 · 最新优先" title="内容情报" copy="按发布时间展示最新测试信号，快速定位值得跟进的变化。" />
     <div className="feed-tools">
       <div className="feed-toolbar">
         <Input.Search value={query} onChange={(event) => onQuery(event.target.value)} onSearch={onSearch} enterButton="检索" placeholder="检索标题、摘要或正文" aria-label="检索内容" />
@@ -723,7 +723,7 @@ function ContentView({ items, total, page, loading, query, startDate, endDate, m
           <Button aria-label="紧凑列表" aria-pressed={viewMode === 'compact'} type={viewMode === 'compact' ? 'primary' : 'text'} icon={<UnorderedListOutlined />} onClick={() => setViewMode('compact')}>紧凑列表</Button>
           <Button aria-label="卡片视图" aria-pressed={viewMode === 'card'} type={viewMode === 'card' ? 'primary' : 'text'} icon={<AppstoreOutlined />} onClick={() => setViewMode('card')}>卡片视图</Button>
         </div>
-        <span className="result-count">{total} 条情报</span>
+        <span className="result-count"><strong>最新优先</strong><span>{total} 条情报</span></span>
       </div>
       {advancedFiltersOpen && <div className="advanced-filters">
         <label>开始日期<input aria-label="开始日期" type="date" value={startDate} max={endDate || undefined} onChange={(event) => onStartDate(event.target.value)} /></label>

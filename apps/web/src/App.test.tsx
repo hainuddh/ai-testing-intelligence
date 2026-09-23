@@ -68,6 +68,8 @@ describe('management radar workflow', () => {
 
     render(<App />)
     expect(await screen.findByText('Agents gain new tools')).toBeInTheDocument()
+    expect(screen.getByRole('heading', { name: '内容情报' }).closest('.page-intro')).toHaveClass('compact')
+    expect(screen.getByText('最新优先')).toBeInTheDocument()
     const compactView = screen.getByRole('button', { name: '紧凑列表' })
     const cardView = screen.getByRole('button', { name: '卡片视图' })
     expect(compactView).toHaveAttribute('aria-pressed', 'true')
