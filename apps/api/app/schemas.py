@@ -245,3 +245,88 @@ class ContentBulkReanalyzeResponse(BaseModel):
 class DatabaseStatusResponse(BaseModel):
     dialect: str
     row_counts: dict[str, int]
+
+
+class GitHubRepoResponse(BaseModel):
+    model_config = ConfigDict(from_attributes=True)
+
+    id: int
+    full_name: str
+    description: str | None
+    html_url: str
+    primary_language: str | None
+    topics: list[str]
+    homepage: str | None
+    license_name: str | None
+    archived: bool
+    stars: int
+    forks: int
+    open_issues: int
+    watchers: int
+    repo_created_at: datetime | None
+    repo_pushed_at: datetime | None
+    status: str
+    momentum_score: float | None
+    momentum_tier: str | None
+    summary: str | None
+    summary_status: str
+    first_seen_at: datetime
+    last_seen_at: datetime
+
+
+class GitHubRepoListResponse(BaseModel):
+    items: list[GitHubRepoResponse]
+    total: int
+
+
+class GitHubDiscoverRequest(BaseModel):
+    languages: list[str] = Field(default_factory=list)
+    topics: list[str] = Field(default_factory=list)
+
+
+class GitHubDiscoverResponse(BaseModel):
+    discovered: int
+
+
+class GitHubPreferenceResponse(BaseModel):
+    topics: list[str]
+
+
+class GitHubPreferenceUpdate(BaseModel):
+    topics: list[str] = Field(default_factory=list)
+
+
+class GitHubRepoStatusUpdate(BaseModel):
+    status: Literal["discovered", "watched", "tracked", "ignored"]
+
+
+class GitHubReportItemResponse(BaseModel):
+    model_config = ConfigDict(from_attributes=True)
+
+    id: int
+    repo_id: int
+    rank: int
+    momentum_score: float | None
+    momentum_tier: str | None
+    highlight: str | None
+    star_delta_24h: int | None
+    star_delta_7d: int | None
+
+
+class GitHubReportResponse(BaseModel):
+    model_config = ConfigDict(from_attributes=True)
+
+    id: int
+    report_type: str
+    period_start: datetime | None
+    period_end: datetime | None
+    title: str
+    body_markdown: str | None
+    status: str
+    generated_at: datetime
+    items: list[GitHubReportItemResponse] = Field(default_factory=list)
+
+
+class GitHubReportListResponse(BaseModel):
+    items: list[GitHubReportResponse]
+    total: int

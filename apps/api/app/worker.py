@@ -10,6 +10,7 @@ from app.cache import delete_prefix_sync
 from app.config import settings
 from app.database import engine
 from app.fetcher import fetch_endpoint
+from app.github_service import discover_candidates, discovery_due
 from app.models import FetchRun, SourceEndpoint
 
 logging.basicConfig(level=logging.INFO, format="%(asctime)s %(levelname)s %(message)s")
@@ -62,6 +63,19 @@ def run_analysis() -> None:
         delete_prefix_sync("collected:list")
 
 
+def run_github_discovery() -> None:
+    """定时触发 GitHub 自动发现（无 token 时受 Search API 配额约束）。"""
+    try:
+        with Session(engine) as db:
+            if not discovery_due(db):
+                return
+            count = discover_candidates(db, settings.github_discovery_languages_list)
+            if count:
+                logger.info("GitHub discovery discovered=%s", count)
+    except Exception:
+        logger.exception("GitHub discovery failed")
+
+
 def run_once() -> None:
     if engine.dialect.name != "postgresql":
         with Session(engine) as db:
@@ -81,6 +95,7 @@ def run_once() -> None:
                     db.rollback()
                     logger.exception("Unhandled fetch failure endpoint_id=%s", endpoint.id)
         run_analysis()
+        run_github_discovery()
         if any_created:
             delete_prefix_sync("content:list")
             delete_prefix_sync("collected:list")
@@ -109,6 +124,7 @@ def run_once() -> None:
         finally:
             lock_connection.execute(text("SELECT pg_advisory_unlock(82429101)"))
     run_analysis()
+    run_github_discovery()
     if any_created:
         delete_prefix_sync("content:list")
         delete_prefix_sync("collected:list")

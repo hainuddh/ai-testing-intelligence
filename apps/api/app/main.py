@@ -3,7 +3,7 @@ from contextlib import asynccontextmanager
 from fastapi import APIRouter, FastAPI
 
 from app.config import settings
-from app.routers import auth, collected_content, content, database_status, sources, users
+from app.routers import auth, collected_content, content, database_status, github, sources, users
 
 
 @asynccontextmanager
@@ -26,4 +26,5 @@ api.include_router(content.router)
 api.include_router(collected_content.router)
 api.include_router(users.router)
 api.include_router(database_status.router)
+api.include_router(github.router)
 app.include_router(api)

@@ -1,5 +1,5 @@
 ## 项目概述
-AI 测试情报雷达（Signal Atlas / 技术情报雷达）—— 智能测试内容发现、信源管理、无损耗采集、历史去重与 Markdown 交付的全栈系统。信源经 RSS/Web 采集，交由 OpenAI 兼容模型分析生成测试情报（场景/建议/风险），支持收藏与合并导出 Markdown 报告。
+AI 测试情报雷达（Signal Atlas / 技术情报雷达）—— 智能测试内容发现、信源管理、无损耗采集、历史去重与 Markdown 交付的全栈系统。信源经 RSS/Web 采集，交由 OpenAI 兼容模型分析生成测试情报（场景/建议/风险），支持收藏与合并导出 Markdown 报告。另含 GitHub 项目追踪维度（自动发现候选 + 确定性动量打分 + 日/周/月报，见 `docs/github-tracking-plan.md`）。
 
 ## 技术栈
 - **前端**：`apps/web` — React 19 + Vite 7 + Ant Design 6 + TypeScript（纯 SPA，无服务端壳）。包管理器 pnpm。
@@ -10,6 +10,7 @@ AI 测试情报雷达（Signal Atlas / 技术情报雷达）—— 智能测试�
 ## 目录结构
 - `apps/web/src/App.tsx` — 前端主入口（单文件 SPA，含登录、情报雷达、信源管理、采集内容、用户管理等视图）
 - `apps/api/app/` — FastAPI 应用（`main.py`、`routers/`、`models.py`、`analyzer.py`、`fetcher.py`、`worker.py`）
+- `apps/api/app/github_*.py` — GitHub 追踪模块（`github_client.py` Search API 客户端、`github_discovery.py` 候选解析/打分、`github_momentum.py` 确定性动量分、`github_summary.py` 轻量摘要、`github_analysis.py` 深度情报分析（项目摘要/测试价值/应用场景/落地建议）、`github_service.py` 发现/关注/日报编排）
 - `apps/api/migrations/` — Alembic 迁移（SQLite 与 PostgreSQL 共用）
 - `scripts/` — 部署/预览包装脚本
 - `docs/` — 部署中文指南、上线操作记录、用户手册
@@ -18,6 +19,8 @@ AI 测试情报雷达（Signal Atlas / 技术情报雷达）—— 智能测试�
 - 前端 Vite dev server：`apps/web` 下 `pnpm exec vite --host 0.0.0.0 --port <port>`，proxy `/api` → `localhost:8000`
 - 后端：`apps/api` 下 `uv run uvicorn app.main:app`，API 统一前缀 `/api/v1`（含 `/health`）
 - 数据库迁移：`apps/api` 下 `.venv/bin/alembic upgrade head`
+- GitHub 追踪 API（`routers/github.py`，前缀 `/api/v1/github`）：`POST /discover` 手动触发自动发现（默认从偏好读关注主题过滤）、`GET /repos` 候选列表（`?status=`、`?topic=` 过滤）、`PATCH /repos/{id}/status` 关注/忽略、`GET /preferences` 读关注主题、`PUT /preferences` 写关注主题、`GET /reports` 日报列表、`POST /reports/generate` 生成日报、`GET /reports/{id}` 详情；写操作需 maintainer 权限。
+- GitHub 追踪数据表：`github_repos`（候选/追踪仓库 + 动量分 + 轻量摘要 + 深度情报分析 `intel_*` 字段）、`github_snapshots`（时序快照）、`github_reports` / `github_report_items`（日报）、`github_preferences`（单例关注主题配置，JSON 列 `topics`）；worker 每轮经 `discovery_due`（默认 24h 间隔）自动触发发现。
 - 预览脚本：`scripts/preview-build.sh` / `scripts/preview-run.sh`
 - 部署脚本：`scripts/deploy-build.sh` / `scripts/deploy-run.sh`（run 阶段用零依赖 Node 静态服务器 `scripts/static-server.mjs` 服务 `apps/web/dist`，支持 SPA fallback）
 
@@ -28,8 +31,11 @@ AI 测试情报雷达（Signal Atlas / 技术情报雷达）—— 智能测试�
 - Node 项目只用 pnpm；Python 用 uv + 项目内 `.venv`。
 - 后端依赖安装用阿里云 PyPI 镜像（`--index-url https://mirrors.aliyun.com/pypi/simple/`），否则下载极慢。
 - 不修改已创建的 `sub_id`（d6048ed2）。
+- **分支开发约定（长期约束）**：启动开发新功能前，必须先向用户确认是否新建分支；仅在用户明确同意后才创建新分支。不得擅自切分支，也不得直接在 `main` 主分支上开发新功能。
 - **记账界定（长期约定）**：为在 coze 沙箱环境预览/部署而做的改动（`.coze`、`.preview`、`.gitignore`、`scripts/*`、`AGENTS.md` 中部署/预览相关内容）**不计入"代码修改"**；后续核对/统计代码变更量时予以排除。业务代码仅指 `apps/web/src/**`、`apps/api/app/**`、`apps/api/migrations/**`、`docs/**` 等产品源码与文档。此项仅作记账口径，不做任何 git 回滚/移除跟踪动作。
 - **TDD 开发模式（长期约束）**：所有开发遵循 TDD——先写失败测试（Red）→ 写最小实现使其通过（Green）→ 重构（Refactor）。前端用 vitest（`apps/web` 下 `pnpm exec vitest`，用例在 `apps/web/src/App.test.tsx`）；后端用 pytest（`apps/api` 下 `.venv/bin/pytest`，用例在 `apps/api/tests/`）。任何功能改动需先补写/调整对应测试用例，再写实现，最后跑测试确认全部通过才能视为完成。
+- **GitHub 追踪功能（长期约定）**：MVP 三大决策——① 鉴权暂不接 PAT，`ATI_GITHUB_TOKEN`（`Settings.github_token`）预留，采集客户端 token 为空不带 Bearer、非空则带，切换免改业务代码；② 报告只做站内展示 + Markdown 导出（复用现有 content 导出），推送（邮件/IM）延后；③ 分析「确定性动量打分（纯函数，不调 LLM）+ 轻量 LLM 摘要（高置信候选批量一次）+ 日报深度情报分析（项目摘要/测试价值分析/应用场景推荐/落地建议，复用内容情报分析 LLM 配置 `ATI_ANALYSIS_*`，日报生成时对入选仓库幂等调用）」；周报/月报聚合与站外推送仍延后。自动发现走 `Search API`（无 token 10 req/min 独立桶），持续快照走 `Core API`（无 token 60 req/h，规模化需 token）。详见 `docs/github-tracking-plan.md`、`docs/github-auto-discovery-plan.md`。
+- **GitHub 关注主题（长期约定）**：候选"内容太多"的治理手段——单例 `github_preferences.topics`（JSON list）存关注主题，`POST /discover` 时非空则按主题构造 Search 查询（每个主题两条：`topic:<term>` 精确官方标签 + `<term> in:name,description,topics` 模糊关键词），源头上只发现相关候选，减少候选池噪声；`GET /repos` 支持 `?topic=` 对已有候选按主题筛选；`GET/PUT /preferences` 负责读写。主题词在存储/建查询前统一 strip+去重+去空。未配置主题时退回纯语言发现（原行为不变）。
 
 ## 常见问题和预防
 - 前端无 node_modules：先 `pnpm install`（根目录 `package-lock.json` 存在，用 pnpm 会生成 pnpm-lock）。
