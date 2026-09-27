@@ -16,10 +16,10 @@ createRoot(document.getElementById('root')!).render(
           colorTextBase: '#effff4',
           colorBorder: '#24423a',
           borderRadius: 6,
-          fontFamily: 'Inter, "Segoe UI", sans-serif',
+          fontFamily: 'var(--font-sans)',
         },
         components: {
-          Button: { fontWeight: 700 },
+          Button: { fontWeight: 600 },
           Input: { activeShadow: '0 0 0 2px rgba(142, 255, 184, 0.15)' },
         },
       }}

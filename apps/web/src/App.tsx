@@ -1244,7 +1244,7 @@ function GitHubView({ repos, total, reports, loading, discovering, statusFilter,
       <Button icon={<EditOutlined />} onClick={onManageTopics}>关注主题</Button>
       <span className="muted">共 {total} 个项目</span>
     </div>
-    <Table rowKey="id" columns={columns} dataSource={repos} loading={loading} pagination={{ pageSize: 20 }} size="middle" />
+    <Table rowKey="id" columns={columns} dataSource={repos} loading={loading} pagination={{ pageSize: 20 }} size="middle" scroll={{ x: 1000 }} />
     <Divider />
     <div className="github-reports">
       <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', marginBottom: 12 }}>
@@ -1262,8 +1262,8 @@ function GitHubView({ repos, total, reports, loading, discovering, statusFilter,
         )}
       />
     </div>
-    <Modal title={report?.title} open={!!report} footer={null} onCancel={onCloseReport} width={820}>
-      <div style={{ maxHeight: 560, overflow: 'auto' }}><Markdown text={report?.body_markdown ?? ''} /></div>
+    <Modal className="github-report-modal" title={report?.title} open={!!report} footer={null} onCancel={onCloseReport} width={820}>
+      <div className="github-report-content" style={{ maxHeight: 560, overflow: 'auto' }}><Markdown text={report?.body_markdown ?? ''} /></div>
     </Modal>
   </div>
 }
