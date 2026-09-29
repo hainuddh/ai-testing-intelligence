@@ -247,6 +247,117 @@ describe('management radar workflow', () => {
     expect(await screen.findByText('example.com')).toBeInTheDocument()
   })
 
+  it.each([
+    ['No valid RSS or Atom feed was found for this website', '未发现可用的 RSS / Atom 订阅，请检查网站地址，或尝试输入博客、新闻栏目地址。'],
+    ['Internal Server Error', '自动发现失败，请检查网站地址或稍后重试。'],
+  ])('shows a Chinese discovery notification for %s above the drawer', async (detail, expected) => {
+    localStorage.setItem('access_token', 'existing-token')
+    const user = userEvent.setup()
+    vi.spyOn(globalThis, 'fetch')
+      .mockResolvedValueOnce(json({ id: 'user-2', username: 'maintainer', role: 'maintainer' }))
+      .mockResolvedValueOnce(json({ items: [], total: 0 }))
+      .mockResolvedValueOnce(json({ items: [], total: 0 }))
+      .mockResolvedValueOnce(json({ detail }, 422))
+
+    render(<App />)
+    await screen.findByRole('heading', { name: '内容情报' })
+    await user.click(screen.getByRole('button', { name: '信源管理' }))
+    await screen.findByText('暂无信源监听点。')
+    await user.click(screen.getByRole('button', { name: 'radar-chart 自动发现' }))
+    await user.type(screen.getByLabelText('网站主页'), 'https://example.com/')
+    await user.click(screen.getByRole('button', { name: '开始探测' }))
+
+    const notice = await screen.findByText(expected)
+    expect(notice.closest('.ant-notification-notice')).not.toBeNull()
+    expect(notice.closest('.ant-drawer')).toBeNull()
+    expect(screen.getByLabelText('网站主页')).toBeVisible()
+    expect(screen.queryByText(detail)).not.toBeInTheDocument()
+    expect(document.querySelector('.dashboard-alert')).toBeNull()
+  })
+
+  it.each([
+    ['The discovered feed is no longer valid', '订阅地址已失效，请重新探测后再启用监听。'],
+    ['Source name already exists', '信源名称已存在，请修改名称后重试。'],
+  ])('shows a Chinese installation notification for %s', async (detail, expected) => {
+    localStorage.setItem('access_token', 'existing-token')
+    const user = userEvent.setup()
+    vi.spyOn(globalThis, 'fetch')
+      .mockResolvedValueOnce(json({ id: 'user-2', username: 'maintainer', role: 'maintainer' }))
+      .mockResolvedValueOnce(json({ items: [], total: 0 }))
+      .mockResolvedValueOnce(json({ items: [], total: 0 }))
+      .mockResolvedValueOnce(json({ homepage_url: 'https://example.com/', feed_url: 'https://example.com/feed.xml', suggested_name: 'example.com', samples: [] }))
+      .mockResolvedValueOnce(json({ detail }, 422))
+
+    render(<App />)
+    await screen.findByRole('heading', { name: '内容情报' })
+    await user.click(screen.getByRole('button', { name: '信源管理' }))
+    await screen.findByText('暂无信源监听点。')
+    await user.click(screen.getByRole('button', { name: 'radar-chart 自动发现' }))
+    await user.type(screen.getByLabelText('网站主页'), 'https://example.com/')
+    await user.click(screen.getByRole('button', { name: '开始探测' }))
+    await user.click(await screen.findByRole('button', { name: '确认并启用监听' }))
+
+    expect((await screen.findByText(expected)).closest('.ant-notification-notice')).not.toBeNull()
+    expect(screen.getByLabelText('信源名称')).toHaveValue('example.com')
+    expect(screen.queryByText(detail)).not.toBeInTheDocument()
+    expect(document.querySelector('.dashboard-alert')).toBeNull()
+  })
+
+  it.each(['source', 'endpoint', 'manual'])('shows Chinese %s errors outside the drawer', async (operation) => {
+    localStorage.setItem('access_token', 'existing-token')
+    const user = userEvent.setup()
+    const item = { ...source, id: '12', source_type: 'wechat' }
+    const details = {
+      source: ['Source name already exists', '信源名称已存在，请修改名称后重试。'],
+      endpoint: ['Endpoint not found', '采集端点不存在，请刷新后重试。'],
+      manual: ['Content with this URL or title already exists', '相同链接或标题的内容已存在，请勿重复录入。'],
+    }
+    const [detail, expected] = details[operation as keyof typeof details]
+    vi.spyOn(globalThis, 'fetch')
+      .mockResolvedValueOnce(json({ id: 'user-2', username: 'maintainer', role: 'maintainer' }))
+      .mockResolvedValueOnce(json({ items: [], total: 0 }))
+      .mockResolvedValueOnce(json({ items: [item], total: 1 }))
+      .mockResolvedValueOnce(json({ detail }, 409))
+    render(<App />)
+    await screen.findByRole('heading', { name: '内容情报' })
+    await user.click(screen.getByRole('button', { name: '信源管理' }))
+    await screen.findByText(item.name)
+    if (operation === 'source') {
+      await user.click(screen.getByRole('button', { name: 'edit 编辑' }))
+      await user.click(screen.getByRole('button', { name: '保存修改' }))
+    } else if (operation === 'endpoint') {
+      await user.click(screen.getByRole('button', { name: 'radar-chart 采集端点' }))
+    } else {
+      await user.click(screen.getByRole('button', { name: `录入内容 ${item.name}` }))
+      fireEvent.change(screen.getByLabelText('内容标题'), { target: { value: '重复标题' } })
+      fireEvent.change(screen.getByLabelText('原文地址'), { target: { value: 'https://example.com/article' } })
+      fireEvent.change(screen.getByLabelText('内容摘要'), { target: { value: '测试摘要' } })
+      await user.click(screen.getByRole('button', { name: '提交分析' }))
+    }
+    expect((await screen.findByText(expected)).closest('.ant-notification-notice')).not.toBeNull()
+    expect(screen.queryByText(detail)).not.toBeInTheDocument()
+    expect(document.querySelector('.dashboard-alert')).toBeNull()
+  })
+
+  it('shows Chinese validation errors when saving GitHub topics', async () => {
+    localStorage.setItem('access_token', 'existing-token')
+    const user = userEvent.setup()
+    vi.spyOn(globalThis, 'fetch')
+      .mockResolvedValueOnce(json({ id: 'user-2', username: 'maintainer', role: 'maintainer' }))
+      .mockResolvedValueOnce(json({ items: [], total: 0 }))
+      .mockResolvedValueOnce(json({ items: [], total: 0 }))
+      .mockResolvedValueOnce(json({ items: [], total: 0 }))
+      .mockResolvedValueOnce(json({ topics: [] }))
+      .mockResolvedValueOnce(json({ detail: [{ loc: ['body', 'topics'], msg: 'Input should be a valid list' }] }, 422))
+    render(<App />)
+    await screen.findByRole('heading', { name: '内容情报' })
+    await user.click(screen.getByRole('button', { name: 'GitHub 追踪' }))
+    await user.click(await screen.findByRole('button', { name: 'edit 关注主题' }))
+    await user.click(screen.getByRole('button', { name: '保存关注主题' }))
+    expect((await screen.findByText('提交的数据不符合要求，请检查填写内容后重试。')).closest('.ant-notification-notice')).not.toBeNull()
+    expect(screen.queryByText('[object Object]')).not.toBeInTheDocument()
+  })
+
   it('submits WeChat content without fetching the platform page', async () => {
     localStorage.setItem('access_token', 'existing-token')
     const user = userEvent.setup()

@@ -33,6 +33,7 @@ import {
   Input,
   List,
   Modal,
+  notification,
   Pagination,
   Select,
   Space,
@@ -43,6 +44,7 @@ import {
   Typography,
 } from 'antd'
 import type { FormInstance } from 'antd'
+import { userFacingError } from './errors'
 
 type Role = 'viewer' | 'maintainer' | 'admin'
 type User = { id: string; username: string; role: Role; is_active?: boolean }
@@ -195,7 +197,23 @@ const dateBoundary = (value: string, endOfDay = false) => {
   return new Date(year, month - 1, day, endOfDay ? 23 : 0, endOfDay ? 59 : 0, endOfDay ? 59 : 0, endOfDay ? 999 : 0).toISOString()
 }
 
+function sourceDiscoveryError(error: unknown, installing: boolean): string {
+  const detail = error instanceof Error ? error.message : ''
+  const messages: Record<string, string> = {
+    'No valid RSS or Atom feed was found for this website': '未发现可用的 RSS / Atom 订阅，请检查网站地址，或尝试输入博客、新闻栏目地址。',
+    'The discovered feed is no longer valid': '订阅地址已失效，请重新探测后再启用监听。',
+    'Source name already exists': '信源名称已存在，请修改名称后重试。',
+    'Insufficient permissions': '权限不足，请使用维护者或管理员账号操作。',
+    'Failed to fetch': '网络连接异常，请检查网络后重试。',
+    'NetworkError when attempting to fetch resource.': '网络连接异常，请检查网络后重试。',
+    'Load failed': '网络连接异常，请检查网络后重试。',
+    '登录状态已失效，请重新登录': '登录状态已失效，请重新登录。',
+  }
+  return messages[detail] || (installing ? '启用监听失败，请稍后重试。' : '自动发现失败，请检查网站地址或稍后重试。')
+}
+
 export default function App() {
+  const [discoveryNotification, discoveryNotificationHolder] = notification.useNotification({ placement: 'topRight', duration: 0 })
   const [token, setToken] = useState(() => localStorage.getItem('access_token'))
   const [me, setMe] = useState<User | null>(null)
   const [tab, setTab] = useState<Tab>('content')
@@ -241,7 +259,15 @@ export default function App() {
   const [topicsDrawer, setTopicsDrawer] = useState(false)
   const [loading, setLoading] = useState(false)
   const [saving, setSaving] = useState(false)
-  const [error, setError] = useState('')
+  const [error, setErrorState] = useState('')
+  const setError = (detail: string) => setErrorState(detail ? userFacingError(detail) : '')
+  useEffect(() => {
+    if (error && token) {
+      discoveryNotification.error({ key: 'operation-error', title: '操作失败', description: error, onClose: () => setErrorState('') })
+    } else {
+      discoveryNotification.destroy('operation-error')
+    }
+  }, [error, token, discoveryNotification])
   const [sourceDrawer, setSourceDrawer] = useState(false)
   const [userDrawer, setUserDrawer] = useState(false)
   const [endpointDrawer, setEndpointDrawer] = useState(false)
@@ -283,7 +309,7 @@ export default function App() {
         let detail = `请求失败 (${response.status})`
         try {
           const body = await response.json()
-          if (body?.detail) detail = body.detail
+          if (body?.detail) detail = typeof body.detail === 'string' ? body.detail : userFacingError(body.detail)
         } catch { /* ignore parse errors */ }
         throw new Error(detail)
       }
@@ -641,6 +667,7 @@ export default function App() {
   }
 
   const openDiscovery = () => {
+    discoveryNotification.destroy('source-discovery-error')
     setDiscovery(null)
     discoveryForm.resetFields()
     discoveryForm.setFieldsValue({ languages: ['en'], trust_level: 3, topics: '' })
@@ -650,6 +677,7 @@ export default function App() {
   const discoverSource = async () => {
     const homepage_url = discoveryForm.getFieldValue('homepage_url')
     if (!homepage_url) return
+    discoveryNotification.destroy('source-discovery-error')
     setSaving(true)
     setError('')
     try {
@@ -659,7 +687,7 @@ export default function App() {
       setDiscovery(result)
       discoveryForm.setFieldValue('name', result.suggested_name)
     } catch (requestError) {
-      setError(requestError instanceof Error ? requestError.message : '没有发现有效订阅源')
+      discoveryNotification.error({ key: 'source-discovery-error', title: '自动发现失败', description: sourceDiscoveryError(requestError, false) })
     } finally {
       setSaving(false)
     }
@@ -667,6 +695,7 @@ export default function App() {
 
   const installDiscoveredSource = async (values: SourceDiscoveryForm) => {
     if (!discovery) return
+    discoveryNotification.destroy('source-discovery-error')
     setSaving(true)
     setError('')
     try {
@@ -679,7 +708,7 @@ export default function App() {
       setDiscoveryDrawer(false)
       await loadSources()
     } catch (requestError) {
-      setError(requestError instanceof Error ? requestError.message : '启用发现信源失败')
+      discoveryNotification.error({ key: 'source-discovery-error', title: '启用监听失败', description: sourceDiscoveryError(requestError, true) })
     } finally {
       setSaving(false)
     }
@@ -824,7 +853,7 @@ export default function App() {
     }
   }
 
-  if (!token) return <Login error={error} loading={saving} onLogin={login} />
+  if (!token) return <>{discoveryNotificationHolder}<Login error={error} loading={saving} onLogin={login} /></>
   if (!me && loading) return <div className="boot-state"><Spin size="large" /><span>正在确认雷达权限...</span></div>
 
   const tabs: { id: Tab; label: string; icon: React.ReactNode; admin?: boolean }[] = [
@@ -838,6 +867,7 @@ export default function App() {
 
   return (
     <main className="dashboard-shell">
+      {discoveryNotificationHolder}
       <header className="topbar">
         <div className="brand"><RadarChartOutlined /> SIGNAL ATLAS</div>
         <div className="topbar-actions">
@@ -854,7 +884,6 @@ export default function App() {
         ))}
       </nav>
       <section className="dashboard-content">
-        {error && <Alert className="dashboard-alert" type="error" title={error} showIcon closable onClose={() => setError('')} />}
         {tab === 'content' && <ContentView items={content} total={contentTotal} page={contentPage} loading={loading} query={query} startDate={startDate} endDate={endDate} minValueScore={minValueScore} disposition={contentDisposition} selectedIds={selectedContentIds} exporting={exporting} onQuery={setQuery} onStartDate={setStartDate} onEndDate={setEndDate} onMinValueScore={setMinValueScore} onDisposition={(value) => { const nextScore = value === 'watch' ? 40 : 60; setContentDisposition(value); setMinValueScore(nextScore); setSelectedContentIds([]); setContentPage(1); void loadContent(1, query, startDate, endDate, nextScore, value) }} onOpen={setSelectedContent} onToggleSelection={toggleContentSelection} onToggleCurrentPage={toggleCurrentPageSelection} onClearSelection={() => setSelectedContentIds([])} onExport={() => void exportSelectedContent()} onSearch={() => { setSelectedContentIds([]); setContentPage(1); void loadContent(1, query) }} onReset={() => { setSelectedContentIds([]); setQuery(''); setStartDate(''); setEndDate(''); setMinValueScore(60); setContentDisposition('radar'); setContentPage(1); void loadContent(1, '', '', '', 60, 'radar') }} onPage={(page) => { setContentPage(page); void loadContent(page) }} />}
         {tab === 'sources' && <SourcesView sources={sources} total={sourceTotal} loading={loading} canManage={canManageSources} canDelete={isAdmin} onAdd={() => openSource()} onDiscover={openDiscovery} onManualContent={openManualContent} onEndpoints={(source) => void openEndpoints(source)} onEdit={openSource} onDelete={(source) => Modal.confirm({ title: `删除信源「${source.name}」？`, content: '删除后无法恢复，并会清除关联内容。', okText: '确认删除', cancelText: '取消', okButtonProps: { danger: true }, onOk: () => removeSource(source) })} />}
         {tab === 'collection' && isAdmin && <CollectedContentView items={collectedItems} total={collectedTotal} page={collectedPage} loading={loading} saving={saving} sources={sources} query={collectedQuery} status={collectedStatus} disposition={collectedDisposition} sourceId={collectedSource} startDate={collectedStartDate} endDate={collectedEndDate} selectedIds={selectedCollectedIds} onQuery={setCollectedQuery} onStatus={setCollectedStatus} onDisposition={setCollectedDisposition} onSource={setCollectedSource} onStartDate={setCollectedStartDate} onEndDate={setCollectedEndDate} onToggle={(id) => setSelectedCollectedIds((current) => { if (current.includes(id)) return current.filter((value) => value !== id); if (current.length >= 100) { setError('单次最多处理 100 条采集内容'); return current } return [...current, id] })} onTogglePage={() => { const pageIds = collectedItems.map((item) => item.id); const all = pageIds.every((id) => selectedCollectedIds.includes(id)); setSelectedCollectedIds((current) => { if (all) return current.filter((id) => !pageIds.includes(id)); const additions = pageIds.filter((id) => !current.includes(id)); const available = 100 - current.length; if (additions.length > available) setError('单次最多处理 100 条采集内容'); return [...current, ...additions.slice(0, available)] }) }} onApply={() => { const filters = { query: collectedQuery, status: collectedStatus, disposition: collectedDisposition, sourceId: collectedSource, startDate: collectedStartDate, endDate: collectedEndDate }; setAppliedCollectedFilters(filters); setSelectedCollectedIds([]); setCollectedPage(1); void loadCollectedContent(1, filters) }} onReset={() => { const filters = { query: '', status: '', disposition: '', sourceId: '', startDate: '', endDate: '' }; setCollectedQuery(''); setCollectedStatus(''); setCollectedDisposition(''); setCollectedSource(''); setCollectedStartDate(''); setCollectedEndDate(''); setAppliedCollectedFilters(filters); setSelectedCollectedIds([]); setCollectedPage(1); void loadCollectedContent(1, filters) }} onPage={(page) => { setCollectedPage(page); void loadCollectedContent(page, appliedCollectedFilters) }} onReanalyze={(ids) => Modal.confirm({ title: `重新分析 ${ids.length} 条内容？`, content: '现有评分和结论会被清空，内容将重新进入分析队列。', okText: '确认重新分析', cancelText: '取消', onOk: () => reanalyzeCollectedItems(ids) })} onDelete={(ids) => Modal.confirm({ title: `删除 ${ids.length} 条采集内容？`, content: '删除后原始采集记录和分析结果均无法恢复。', okText: '确认删除', cancelText: '取消', okButtonProps: { danger: true }, onOk: () => deleteCollectedItems(ids) })} />}
@@ -863,10 +892,10 @@ export default function App() {
         {tab === 'github' && <GitHubView repos={githubRepos} total={githubRepoTotal} reports={githubReports} loading={githubLoading} discovering={githubDiscovering} statusFilter={githubStatusFilter} topicFilter={githubTopicFilter} topics={githubTopics} report={githubReport} onStatusFilter={changeGithubStatusFilter} onTopicFilter={changeGithubTopicFilter} onManageTopics={() => setTopicsDrawer(true)} onDiscover={() => void runGithubDiscover()} onSetStatus={(id, status) => void setRepoStatus(id, status)} onGenerate={() => void generateDailyReport()} onOpenReport={setGithubReport} onCloseReport={() => setGithubReport(null)} />}
       </section>
       <SourceDrawer open={sourceDrawer} editing={editingSource} form={sourceForm} saving={saving} onClose={() => setSourceDrawer(false)} onSave={saveSource} />
-      <UserDrawer open={userDrawer} editing={editingUser} form={userForm} saving={saving} error={error} onClose={() => setUserDrawer(false)} onSave={saveUser} />
+      <UserDrawer open={userDrawer} editing={editingUser} form={userForm} saving={saving} onClose={() => setUserDrawer(false)} onSave={saveUser} />
       <EndpointDrawer open={endpointDrawer} source={endpointSource} endpoints={endpoints} form={endpointForm} saving={saving} canManage={canManageSources} onClose={() => setEndpointDrawer(false)} onSave={saveEndpoint} onDelete={removeEndpoint} />
       <ManualContentDrawer open={manualContentDrawer} source={manualContentSource} form={manualContentForm} saving={saving} onClose={() => setManualContentDrawer(false)} onSave={saveManualContent} />
-      <SourceDiscoveryDrawer open={discoveryDrawer} discovery={discovery} form={discoveryForm} saving={saving} onClose={() => setDiscoveryDrawer(false)} onDiscover={() => void discoverSource()} onInstall={installDiscoveredSource} />
+      <SourceDiscoveryDrawer open={discoveryDrawer} discovery={discovery} form={discoveryForm} saving={saving} onClose={() => { discoveryNotification.destroy('source-discovery-error'); setDiscoveryDrawer(false) }} onDiscover={() => void discoverSource()} onInstall={installDiscoveredSource} />
       <GitHubTopicsDrawer open={topicsDrawer} topics={githubTopics} saving={saving} onClose={() => setTopicsDrawer(false)} onSave={saveGithubTopics} />
       <IntelligenceModal item={selectedContent} onClose={() => setSelectedContent(null)} />
     </main>
@@ -1083,10 +1112,9 @@ function SourceDrawer({ open, editing, form, saving, onClose, onSave }: { open: 
   </Drawer>
 }
 
-function UserDrawer({ open, editing, form, saving, error, onClose, onSave }: { open: boolean; editing: User | null; form: FormInstance<UserForm>; saving: boolean; error: string; onClose: () => void; onSave: (values: UserForm) => void }) {
+function UserDrawer({ open, editing, form, saving, onClose, onSave }: { open: boolean; editing: User | null; form: FormInstance<UserForm>; saving: boolean; onClose: () => void; onSave: (values: UserForm) => void }) {
   return <Drawer title={<><span className="drawer-kicker">ACCESS PROFILE</span><strong>{editing ? '编辑用户' : '新增用户'}</strong></>} open={open} onClose={onClose} destroyOnHidden>
     <p className="drawer-copy">配置账号身份及其可访问的雷达扇区。</p>
-    {error && <Alert className="drawer-alert" type="error" title={error} showIcon />}
     <Form form={form} layout="vertical" requiredMark={false} onFinish={onSave}>
       <Form.Item label="用户名" name="username" rules={[{ required: true, message: '请输入用户名' }]}><Input /></Form.Item>
       <Form.Item label={editing ? '新密码（留空则不修改）' : '初始密码'} name="password" rules={[...(editing ? [] : [{ required: true, message: '请输入初始密码' }]), { min: 8, message: '密码至少需要 8 个字符' }]}><Input.Password autoComplete="new-password" /></Form.Item>
