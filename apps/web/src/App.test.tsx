@@ -1,4 +1,4 @@
-import { fireEvent, render, screen, waitFor } from '@testing-library/react'
+import { fireEvent, render, screen, waitFor, within } from '@testing-library/react'
 import userEvent from '@testing-library/user-event'
 import { beforeEach, describe, expect, it, vi } from 'vitest'
 import App from './App'
@@ -413,6 +413,9 @@ describe('management radar workflow', () => {
 
     render(<App />)
     await screen.findByRole('heading', { name: '内容情报' })
+    expect(within(screen.getByRole('navigation', { name: '管理导航' })).getAllByRole('button').map((button) => button.getAttribute('aria-label'))).toEqual([
+      '内容情报', 'GitHub 追踪', '信源管理', '采集管理', '数据库状态', '用户管理',
+    ])
     await user.click(screen.getByRole('button', { name: '用户管理' }))
     expect(await screen.findByText('operator')).toBeInTheDocument()
     expect(screen.getByRole('button', { name: '新增用户' })).toBeInTheDocument()
@@ -529,7 +532,12 @@ describe('management radar workflow', () => {
     }))
   })
 
-  it('lists GitHub candidates and switches one to watched', async () => {
+  it.each([
+    ['discovered', '关注', 'watched'],
+    ['discovered', '忽略', 'ignored'],
+    ['watched', '忽略', 'ignored'],
+    ['ignored', '关注', 'watched'],
+  ])('updates GitHub status from %s via %s with JSON headers', async (initialStatus, action, nextStatus) => {
     localStorage.setItem('access_token', 'existing-token')
     const user = userEvent.setup()
     const repo = {
@@ -541,7 +549,7 @@ describe('management radar workflow', () => {
       topics: ['ai', 'agent'],
       stars: 120,
       forks: 8,
-      status: 'discovered',
+      status: initialStatus,
       momentum_score: 72.5,
       momentum_tier: 'new_notable',
       summary: null,
@@ -554,19 +562,43 @@ describe('management radar workflow', () => {
       .mockResolvedValueOnce(json({ items: [repo], total: 1 }))
       .mockResolvedValueOnce(json({ items: [], total: 0 }))
       .mockResolvedValueOnce(json({ topics: [] }))
-      .mockResolvedValueOnce(json({ ...repo, status: 'watched' }))
-      .mockResolvedValueOnce(json({ items: [{ ...repo, status: 'watched' }], total: 1 }))
+      .mockResolvedValueOnce(json({ ...repo, status: nextStatus }))
+      .mockResolvedValueOnce(json({ items: [{ ...repo, status: nextStatus }], total: 1 }))
 
     render(<App />)
     await screen.findByRole('heading', { name: '内容情报' })
     await user.click(screen.getByRole('button', { name: 'GitHub 追踪' }))
     await screen.findByText('acme/awesome-agent')
-    await user.click(screen.getByRole('button', { name: /关注$/ }))
+    await user.click(screen.getByRole('button', { name: new RegExp(`${action}$`) }))
 
     await waitFor(() => expect(fetchMock).toHaveBeenCalledWith('/api/v1/github/repos/7/status', expect.objectContaining({
       method: 'PATCH',
-      body: JSON.stringify({ status: 'watched' }),
+      headers: expect.objectContaining({ 'Content-Type': 'application/json', Authorization: 'Bearer existing-token' }),
+      body: JSON.stringify({ status: nextStatus }),
     })))
+  })
+
+  it('discovers GitHub candidates with a JSON request body', async () => {
+    localStorage.setItem('access_token', 'existing-token')
+    const user = userEvent.setup()
+    const fetchMock = vi.spyOn(globalThis, 'fetch')
+      .mockResolvedValueOnce(json({ id: 'user-2', username: 'maintainer', role: 'maintainer' }))
+      .mockResolvedValueOnce(json({ items: [], total: 0 }))
+      .mockResolvedValueOnce(json({ items: [], total: 0 }))
+      .mockResolvedValueOnce(json({ items: [], total: 0 }))
+      .mockResolvedValueOnce(json({ topics: [] }))
+      .mockResolvedValueOnce(json({ discovered: 0 }))
+      .mockResolvedValueOnce(json({ items: [], total: 0 }))
+    render(<App />)
+    await screen.findByRole('heading', { name: '内容情报' })
+    await user.click(screen.getByRole('button', { name: 'GitHub 追踪' }))
+    await user.click(await screen.findByRole('button', { name: /立即发现候选/ }))
+    await waitFor(() => expect(fetchMock).toHaveBeenCalledWith('/api/v1/github/discover', expect.objectContaining({
+      method: 'POST',
+      headers: expect.objectContaining({ 'Content-Type': 'application/json', Authorization: 'Bearer existing-token' }),
+      body: '{}',
+    })))
+    await waitFor(() => expect(fetchMock.mock.calls.at(-1)?.[0]).toBe('/api/v1/github/repos?'))
   })
 
   it('generates a GitHub daily report', async () => {
@@ -597,10 +629,12 @@ describe('management radar workflow', () => {
 
     await waitFor(() => expect(fetchMock).toHaveBeenCalledWith('/api/v1/github/reports/generate', expect.objectContaining({
       method: 'POST',
+      headers: expect.objectContaining({ 'Content-Type': 'application/json', Authorization: 'Bearer existing-token' }),
+      body: '{}',
     })))
   })
 
-  it('manages GitHub focused topics', async () => {
+  it.each(['', '{Enter}'])('saves AI testing as a GitHub topic with JSON headers (suffix %j)', async (suffix) => {
     localStorage.setItem('access_token', 'existing-token')
     const user = userEvent.setup()
     const fetchMock = vi.spyOn(globalThis, 'fetch')
@@ -608,19 +642,22 @@ describe('management radar workflow', () => {
       .mockResolvedValueOnce(json({ items: [], total: 0 }))
       .mockResolvedValueOnce(json({ items: [], total: 0 }))
       .mockResolvedValueOnce(json({ items: [], total: 0 }))
-      .mockResolvedValueOnce(json({ topics: ['testing'] }))
-      .mockResolvedValueOnce(json({ topics: ['testing'] }))
+      .mockResolvedValueOnce(json({ topics: [] }))
+      .mockResolvedValueOnce(json({ topics: ['AI testing'] }))
 
     render(<App />)
     await screen.findByRole('heading', { name: '内容情报' })
     await user.click(screen.getByRole('button', { name: 'GitHub 追踪' }))
     await user.click(await screen.findByRole('button', { name: /关注主题/ }))
+    await user.type(screen.getByRole('combobox', { name: '关注主题' }), `AI testing${suffix}`)
     await user.click(await screen.findByRole('button', { name: '保存关注主题' }))
 
     await waitFor(() => expect(fetchMock).toHaveBeenCalledWith('/api/v1/github/preferences', expect.objectContaining({
       method: 'PUT',
-      body: JSON.stringify({ topics: ['testing'] }),
+      headers: expect.objectContaining({ 'Content-Type': 'application/json', Authorization: 'Bearer existing-token' }),
+      body: JSON.stringify({ topics: ['AI testing'] }),
     })))
+    await waitFor(() => expect(screen.queryByRole('button', { name: '保存关注主题' })).not.toBeInTheDocument())
   })
 
   it('renders report markdown with clickable repository link', async () => {

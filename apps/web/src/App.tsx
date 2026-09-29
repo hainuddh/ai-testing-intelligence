@@ -299,7 +299,11 @@ export default function App() {
     try {
       const response = await fetch(path, {
         ...options,
-        headers: { Authorization: `Bearer ${token}`, ...options.headers },
+        headers: {
+          Authorization: `Bearer ${token}`,
+          ...(typeof options.body === 'string' ? { 'Content-Type': 'application/json' } : {}),
+          ...options.headers,
+        },
       })
       if (response.status === 401) {
         logout()
@@ -858,11 +862,11 @@ export default function App() {
 
   const tabs: { id: Tab; label: string; icon: React.ReactNode; admin?: boolean }[] = [
     { id: 'content', label: '内容情报', icon: <FileSearchOutlined /> },
+    { id: 'github', label: 'GitHub 追踪', icon: <GithubOutlined /> },
     { id: 'sources', label: '信源管理', icon: <GlobalOutlined /> },
     { id: 'collection', label: '采集管理', icon: <InboxOutlined />, admin: true },
-    { id: 'users', label: '用户管理', icon: <TeamOutlined />, admin: true },
     { id: 'database', label: '数据库状态', icon: <DatabaseOutlined />, admin: true },
-    { id: 'github', label: 'GitHub 追踪', icon: <GithubOutlined /> },
+    { id: 'users', label: '用户管理', icon: <TeamOutlined />, admin: true },
   ]
 
   return (
