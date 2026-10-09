@@ -27,6 +27,8 @@ class DiscoveredRepo:
     homepage: str | None
     license_name: str | None
     archived: bool
+    github_id: int | None = None
+    fork: bool = False
 
 
 def build_discovery_queries(languages: list[str], stars_min: int = 20) -> list[str]:
@@ -44,10 +46,12 @@ def _quote_term(term: str) -> str:
 def build_topic_queries(topics: list[str], stars_min: int = 20) -> list[str]:
     """为每个关注主题生成两条查询：官方 topic 精确匹配 + 名称/描述/topics 模糊匹配。"""
     queries: list[str] = []
+    seen: set[str] = set()
     for topic in topics:
         term = _quote_term(topic)
-        if not term:
+        if not term or term.casefold() in seen:
             continue
+        seen.add(term.casefold())
         queries.append(f"topic:{term} stars:>={stars_min}")
         queries.append(f"{term} in:name,description,topics stars:>={stars_min}")
     return queries
@@ -77,6 +81,8 @@ def repo_from_search_item(item: dict) -> DiscoveredRepo:
         homepage=item.get("homepage"),
         license_name=license_name,
         archived=bool(item.get("archived")),
+        github_id=item.get("id"),
+        fork=bool(item.get("fork")),
     )
 
 

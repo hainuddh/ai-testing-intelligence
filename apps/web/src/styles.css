@@ -77,6 +77,22 @@ button, input, textarea { font: inherit; }
 .github-report-content h2 { color: #effff4; font-size: 24px; line-height: 1.4; }
 .github-report-content h3 { color: #dff8e8; font-size: 18px; line-height: 1.5; }
 .github-report-content a { color: #8effb8; }
+.github-exploration { margin: 24px 0; padding: 18px 20px; border: 1px solid #29463d; border-radius: 8px; background: rgba(10,25,20,.8); }
+.github-exploration [role="status"], .github-focus, .github-toolbar { display: flex; align-items: center; flex-wrap: wrap; gap: 12px; }
+.github-exploration span, .github-view .muted { color: var(--text-secondary); font-size: 13px; line-height: 1.7; }
+.github-focus { margin-top: 12px; }
+.github-latest { padding: clamp(18px, 3vw, 32px); border: 1px solid #36584e; border-radius: 8px; background: rgba(10,25,20,.65); }
+.github-report-heading { display: flex; align-items: flex-start; justify-content: space-between; gap: 20px; padding-bottom: 22px; margin-bottom: 20px; border-bottom: 1px solid #29463d; }
+.github-report-heading .ant-typography { margin: 8px 0; }
+.github-latest .github-report-content { max-width: 1000px; }
+.github-history, .github-candidates { margin-top: 24px; padding: 16px 20px; border: 1px solid #29463d; border-radius: 8px; }
+.github-history summary, .github-candidates summary { cursor: pointer; color: #dff8e8; font-size: 15px; font-weight: 600; }
+.github-history summary:focus-visible, .github-candidates summary:focus-visible { outline: 1px solid #8effb8; outline-offset: 5px; }
+.github-history[open] summary, .github-candidates[open] summary { margin-bottom: 16px; }
+.github-toolbar { margin-bottom: 16px; }
+.github-research-empty { padding: 48px 20px; border: 1px dashed #36584e; border-radius: 8px; text-align: center; color: var(--text-secondary); }
+.github-research-empty .anticon { font-size: 36px; color: #8effb8; }
+@media (max-width: 650px) { .github-report-heading { flex-direction: column; }.github-exploration [role="status"] { align-items: flex-start; flex-direction: column; } }
 @media (max-width: 1180px) and (min-width: 651px) {
   .collection-tools { grid-template-columns: repeat(3, minmax(0, 1fr)); }
   .collection-tools .ant-input-search { grid-column: 1 / -1; }

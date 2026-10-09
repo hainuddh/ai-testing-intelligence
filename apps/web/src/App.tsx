@@ -9,14 +9,12 @@ import {
   EyeOutlined,
   FileSearchOutlined,
   FilterOutlined,
-  FileTextOutlined,
   GithubOutlined,
   GlobalOutlined,
   InboxOutlined,
   LogoutOutlined,
   PlusOutlined,
   RadarChartOutlined,
-  RocketOutlined,
   StarFilled,
   StopOutlined,
   SyncOutlined,
@@ -153,6 +151,15 @@ type GitHubReport = {
   generated_at: string
   items: GitHubReportItem[]
 }
+type GitHubExploration = {
+  status: 'never_run' | 'running' | 'completed' | 'failed'
+  started_at: string | null
+  finished_at: string | null
+  next_run_at: string | null
+  discovered_count: number
+  report_id: number | null
+  error_message: string | null
+}
 type Tab = 'content' | 'sources' | 'collection' | 'users' | 'database' | 'github'
 
 const typeLabels: Record<string, string> = { website: '网站', newsletter: '通讯', rss: 'RSS', social: '社交媒体', wechat: '微信公众号', weibo: '微博' }
@@ -252,7 +259,7 @@ export default function App() {
   const [githubStatusFilter, setGithubStatusFilter] = useState('')
   const [githubReports, setGithubReports] = useState<GitHubReport[]>([])
   const [githubLoading, setGithubLoading] = useState(false)
-  const [githubDiscovering, setGithubDiscovering] = useState(false)
+  const [githubExploration, setGithubExploration] = useState<GitHubExploration | null>(null)
   const [githubReport, setGithubReport] = useState<GitHubReport | null>(null)
   const [githubTopics, setGithubTopics] = useState<string[]>([])
   const [githubTopicFilter, setGithubTopicFilter] = useState('')
@@ -602,16 +609,12 @@ export default function App() {
     void loadGithubRepos(undefined, topic)
   }
 
-  const runGithubDiscover = async () => {
-    setGithubDiscovering(true)
-    setError('')
+  const loadGithubExploration = async () => {
     try {
-      await request<{ discovered: number }>('/api/v1/github/discover', { method: 'POST', body: '{}' })
-      await loadGithubRepos()
+      const data = await request<GitHubExploration>('/api/v1/github/exploration')
+      setGithubExploration(data)
     } catch (requestError) {
-      setError(requestError instanceof Error ? requestError.message : 'GitHub 自动发现失败')
-    } finally {
-      setGithubDiscovering(false)
+      setError(requestError instanceof Error ? requestError.message : '加载探索状态失败')
     }
   }
 
@@ -625,14 +628,8 @@ export default function App() {
     }
   }
 
-  const generateDailyReport = async () => {
-    setError('')
-    try {
-      await request<GitHubReport>('/api/v1/github/reports/generate', { method: 'POST', body: '{}' })
-      await loadGithubReports()
-    } catch (requestError) {
-      setError(requestError instanceof Error ? requestError.message : '生成日报失败')
-    }
+  const refreshGithub = async () => {
+    await Promise.all([loadGithubRepos(), loadGithubReports(), loadGithubPreferences(), loadGithubExploration()])
   }
 
   useEffect(() => {
@@ -642,7 +639,11 @@ export default function App() {
     if (tab === 'collection' && me.role === 'admin') void loadCollectedContent()
     if (tab === 'users' && me.role === 'admin') void loadUsers()
     if (tab === 'database' && me.role === 'admin') void loadDatabase()
-    if (tab === 'github') { void loadGithubRepos(); void loadGithubReports(); void loadGithubPreferences() }
+    if (tab === 'github') {
+      void refreshGithub()
+      const timer = window.setInterval(() => { void loadGithubReports(); void loadGithubExploration() }, 60_000)
+      return () => window.clearInterval(timer)
+    }
   }, [me, tab])
 
   const login = async (values: { username: string; password: string }) => {
@@ -893,7 +894,7 @@ export default function App() {
         {tab === 'collection' && isAdmin && <CollectedContentView items={collectedItems} total={collectedTotal} page={collectedPage} loading={loading} saving={saving} sources={sources} query={collectedQuery} status={collectedStatus} disposition={collectedDisposition} sourceId={collectedSource} startDate={collectedStartDate} endDate={collectedEndDate} selectedIds={selectedCollectedIds} onQuery={setCollectedQuery} onStatus={setCollectedStatus} onDisposition={setCollectedDisposition} onSource={setCollectedSource} onStartDate={setCollectedStartDate} onEndDate={setCollectedEndDate} onToggle={(id) => setSelectedCollectedIds((current) => { if (current.includes(id)) return current.filter((value) => value !== id); if (current.length >= 100) { setError('单次最多处理 100 条采集内容'); return current } return [...current, id] })} onTogglePage={() => { const pageIds = collectedItems.map((item) => item.id); const all = pageIds.every((id) => selectedCollectedIds.includes(id)); setSelectedCollectedIds((current) => { if (all) return current.filter((id) => !pageIds.includes(id)); const additions = pageIds.filter((id) => !current.includes(id)); const available = 100 - current.length; if (additions.length > available) setError('单次最多处理 100 条采集内容'); return [...current, ...additions.slice(0, available)] }) }} onApply={() => { const filters = { query: collectedQuery, status: collectedStatus, disposition: collectedDisposition, sourceId: collectedSource, startDate: collectedStartDate, endDate: collectedEndDate }; setAppliedCollectedFilters(filters); setSelectedCollectedIds([]); setCollectedPage(1); void loadCollectedContent(1, filters) }} onReset={() => { const filters = { query: '', status: '', disposition: '', sourceId: '', startDate: '', endDate: '' }; setCollectedQuery(''); setCollectedStatus(''); setCollectedDisposition(''); setCollectedSource(''); setCollectedStartDate(''); setCollectedEndDate(''); setAppliedCollectedFilters(filters); setSelectedCollectedIds([]); setCollectedPage(1); void loadCollectedContent(1, filters) }} onPage={(page) => { setCollectedPage(page); void loadCollectedContent(page, appliedCollectedFilters) }} onReanalyze={(ids) => Modal.confirm({ title: `重新分析 ${ids.length} 条内容？`, content: '现有评分和结论会被清空，内容将重新进入分析队列。', okText: '确认重新分析', cancelText: '取消', onOk: () => reanalyzeCollectedItems(ids) })} onDelete={(ids) => Modal.confirm({ title: `删除 ${ids.length} 条采集内容？`, content: '删除后原始采集记录和分析结果均无法恢复。', okText: '确认删除', cancelText: '取消', okButtonProps: { danger: true }, onOk: () => deleteCollectedItems(ids) })} />}
         {tab === 'users' && isAdmin && <UsersView users={users} loading={loading} me={me} onAdd={() => openUser()} onEdit={openUser} onDelete={(user) => Modal.confirm({ title: `删除用户「${user.username}」？`, content: '该用户将立即失去访问权限。', okText: '确认删除', cancelText: '取消', okButtonProps: { danger: true }, onOk: () => removeUser(user) })} />}
         {tab === 'database' && isAdmin && <DatabaseView data={database} loading={loading} />}
-        {tab === 'github' && <GitHubView repos={githubRepos} total={githubRepoTotal} reports={githubReports} loading={githubLoading} discovering={githubDiscovering} statusFilter={githubStatusFilter} topicFilter={githubTopicFilter} topics={githubTopics} report={githubReport} onStatusFilter={changeGithubStatusFilter} onTopicFilter={changeGithubTopicFilter} onManageTopics={() => setTopicsDrawer(true)} onDiscover={() => void runGithubDiscover()} onSetStatus={(id, status) => void setRepoStatus(id, status)} onGenerate={() => void generateDailyReport()} onOpenReport={setGithubReport} onCloseReport={() => setGithubReport(null)} />}
+        {tab === 'github' && <GitHubView repos={githubRepos} total={githubRepoTotal} reports={githubReports} loading={githubLoading} exploration={githubExploration} canManage={canManageSources} statusFilter={githubStatusFilter} topicFilter={githubTopicFilter} topics={githubTopics} report={githubReport} onStatusFilter={changeGithubStatusFilter} onTopicFilter={changeGithubTopicFilter} onManageTopics={() => setTopicsDrawer(true)} onRefresh={() => void refreshGithub()} onSetStatus={(id, status) => void setRepoStatus(id, status)} onOpenReport={setGithubReport} onCloseReport={() => setGithubReport(null)} />}
       </section>
       <SourceDrawer open={sourceDrawer} editing={editingSource} form={sourceForm} saving={saving} onClose={() => setSourceDrawer(false)} onSave={saveSource} />
       <UserDrawer open={userDrawer} editing={editingUser} form={userForm} saving={saving} onClose={() => setUserDrawer(false)} onSave={saveUser} />
@@ -1235,12 +1236,13 @@ function Markdown({ text }: { text: string }) {
   return <div>{nodes}</div>
 }
 
-function GitHubView({ repos, total, reports, loading, discovering, statusFilter, topicFilter, topics, report, onStatusFilter, onTopicFilter, onManageTopics, onDiscover, onSetStatus, onGenerate, onOpenReport, onCloseReport }: {
+function GitHubView({ repos, total, reports, loading, exploration, canManage, statusFilter, topicFilter, topics, report, onStatusFilter, onTopicFilter, onManageTopics, onRefresh, onSetStatus, onOpenReport, onCloseReport }: {
   repos: GitHubRepo[]
   total: number
   reports: GitHubReport[]
   loading: boolean
-  discovering: boolean
+  exploration: GitHubExploration | null
+  canManage: boolean
   statusFilter: string
   topicFilter: string
   topics: string[]
@@ -1248,9 +1250,8 @@ function GitHubView({ repos, total, reports, loading, discovering, statusFilter,
   onStatusFilter: (status: string) => void
   onTopicFilter: (topic: string) => void
   onManageTopics: () => void
-  onDiscover: () => void
+  onRefresh: () => void
   onSetStatus: (id: number, status: string) => void
-  onGenerate: () => void
   onOpenReport: (report: GitHubReport) => void
   onCloseReport: () => void
 }) {
@@ -1268,34 +1269,73 @@ function GitHubView({ repos, total, reports, loading, discovering, statusFilter,
     } },
   ]
 
+  const latest = reports[0]
+  const reportBody = (item: GitHubReport) => {
+    const markdown = item.body_markdown ?? ''
+    const [firstLine, ...lines] = markdown.split('\n')
+    return firstLine.trim() === `# ${item.title}` ? lines.join('\n').trimStart() : markdown
+  }
+  const statusText = !exploration ? '正在读取探索状态' : {
+    never_run: '等待平台首次自动探索',
+    running: '平台正在探索和分析新项目',
+    completed: exploration.report_id ? '本轮研究已完成' : '本轮暂无符合条件的新项目',
+    failed: '本轮探索失败，平台会自动重试',
+  }[exploration.status]
+  const formatTime = (value: string | null | undefined) => {
+    if (!value) return '等待调度'
+    const utcValue = /(?:Z|[+-]\d{2}:\d{2})$/.test(value) ? value : `${value}Z`
+    return new Date(utcValue).toLocaleString('zh-CN', { timeZone: 'Asia/Shanghai' })
+  }
+  const download = (item: GitHubReport) => {
+    const url = URL.createObjectURL(new Blob([item.body_markdown ?? ''], { type: 'text/markdown;charset=utf-8' }))
+    const link = document.createElement('a')
+    link.href = url
+    link.download = `github-report-${item.id}.md`
+    link.click()
+    window.setTimeout(() => URL.revokeObjectURL(url), 0)
+  }
   return <div className="github-view">
-    <div className="github-toolbar" style={{ display: 'flex', alignItems: 'center', gap: 12, marginBottom: 16, flexWrap: 'wrap' }}>
-      <Button type="primary" icon={<RocketOutlined />} onClick={onDiscover} loading={discovering}>立即发现候选</Button>
-      <Select value={statusFilter} onChange={onStatusFilter} style={{ width: 140 }} options={[{ value: '', label: '全部状态' }, { value: 'discovered', label: '候选' }, { value: 'watched', label: '已关注' }, { value: 'tracked', label: '追踪中' }, { value: 'ignored', label: '已忽略' }]} />
-      <Select value={topicFilter} onChange={onTopicFilter} allowClear style={{ width: 160 }} placeholder="按主题筛选" options={[{ value: '', label: '全部主题' }, ...topics.map((topic) => ({ value: topic, label: topic }))]} />
-      <Button icon={<EditOutlined />} onClick={onManageTopics}>关注主题</Button>
-      <span className="muted">共 {total} 个项目</span>
-    </div>
-    <Table rowKey="id" columns={columns} dataSource={repos} loading={loading} pagination={{ pageSize: 20 }} size="middle" scroll={{ x: 1000 }} />
-    <Divider />
-    <div className="github-reports">
-      <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', marginBottom: 12 }}>
-        <Typography.Title level={5} style={{ margin: 0 }}>GitHub 日报</Typography.Title>
-        <Button icon={<FileTextOutlined />} onClick={onGenerate}>生成今日日报</Button>
+    <div className="page-intro compact">
+      <div><span className="eyebrow">GITHUB RESEARCH</span><h1>GitHub 项目研究</h1>
+        <p>平台每天探索相关项目，每期精选最多 5 个。进入过历史报告的项目不会再次推荐。</p>
       </div>
-      <List
-        dataSource={reports}
-        loading={loading}
-        locale={{ emptyText: '暂无日报，点击「生成今日日报」创建第一份' }}
-        renderItem={(item) => (
-          <List.Item actions={[<Button key="view" size="small" onClick={() => onOpenReport(item)}>查看</Button>]}>
-            <List.Item.Meta title={item.title} description={`${item.items?.length ?? 0} 个项目 · ${new Date(item.generated_at).toLocaleString()}`} />
-          </List.Item>
-        )}
-      />
+      <Space wrap>
+        <Button aria-label="刷新结果" icon={<SyncOutlined />} onClick={onRefresh} loading={loading}>刷新结果</Button>
+        {canManage && <Button icon={<EditOutlined />} onClick={onManageTopics}>关注主题</Button>}
+      </Space>
     </div>
-    <Modal className="github-report-modal" title={report?.title} open={!!report} footer={null} onCancel={onCloseReport} width={820}>
-      <div className="github-report-content" style={{ maxHeight: 560, overflow: 'auto' }}><Markdown text={report?.body_markdown ?? ''} /></div>
+    <section className="github-exploration" aria-label="自动探索状态">
+      <div role="status"><Tag color={exploration?.status === 'failed' ? 'orange' : 'green'}>{statusText}</Tag>
+        <span>最近探索：{formatTime(exploration?.finished_at ?? exploration?.started_at)}</span>
+        <span>下次探索：{formatTime(exploration?.next_run_at)}</span>
+      </div>
+      <div className="github-focus"><span>关注方向</span>{topics.length ? topics.map(topic => <Tag key={topic}>{topic}</Tag>) : <span>尚未设置主题，平台将从默认语言范围探索并筛选测试价值。</span>}</div>
+    </section>
+    {latest ? <article className="github-latest">
+      <div className="github-report-heading"><div><span className="eyebrow">最新研究</span>
+        <Typography.Title level={3}>{latest.title}</Typography.Title>
+        <span className="muted">{latest.items?.length ?? 0} 个项目 · {formatTime(latest.generated_at)}</span>
+      </div><Button icon={<DownloadOutlined />} onClick={() => download(latest)}>下载 Markdown</Button></div>
+      <div className="github-report-content"><Markdown text={reportBody(latest)} /></div>
+    </article> : <div className="github-research-empty"><RadarChartOutlined /><p>研究结果将在平台完成探索后自动展示。</p><span>你可以设置关注方向，稍后回来查看。</span></div>}
+    <details className="github-history"><summary>历史报告</summary>
+      <List dataSource={reports} locale={{ emptyText: '暂无历史报告' }} renderItem={(item) => (
+        <List.Item actions={[<Button key="view" size="small" aria-label={`查看 ${item.title}`} onClick={() => onOpenReport(item)}>查看</Button>]}>
+          <List.Item.Meta title={item.title} description={`${item.items?.length ?? 0} 个项目 · ${formatTime(item.generated_at)}`} />
+        </List.Item>
+      )} />
+    </details>
+    {canManage && <details className="github-candidates"><summary>候选管理</summary>
+      <p className="muted">平台会自动筛选候选并完成研究。你也可以关注或忽略项目；已入报告的项目自动移出候选。</p>
+      <div className="github-toolbar">
+        <Select aria-label="候选状态" value={statusFilter} onChange={onStatusFilter} style={{ width: 140 }} options={[{ value: '', label: '全部状态' }, { value: 'discovered', label: '候选' }, { value: 'watched', label: '已关注' }, { value: 'tracked', label: '追踪中' }, { value: 'ignored', label: '已忽略' }]} />
+        <Select aria-label="候选主题" value={topicFilter} onChange={(value) => onTopicFilter(value ?? '')} allowClear style={{ width: 160 }} placeholder="按主题筛选" options={[{ value: '', label: '全部主题' }, ...topics.map((topic) => ({ value: topic, label: topic }))]} />
+        <span className="muted">共 {total} 个项目</span>
+      </div>
+      <Table rowKey="id" columns={columns} dataSource={repos} loading={loading} pagination={{ pageSize: 20 }} size="middle" scroll={{ x: 1000 }} />
+    </details>}
+    <Modal className="github-report-modal" title={report?.title} open={!!report} footer={report ? <Button icon={<DownloadOutlined />} onClick={() => download(report)}>下载 Markdown</Button> : null} onCancel={onCloseReport} width={820}>
+      <div className="github-report-content" style={{ maxHeight: 560, overflow: 'auto' }}><Markdown text={report ? reportBody(report) : ''} /></div>
     </Modal>
   </div>
 }
@@ -1304,7 +1344,7 @@ function GitHubTopicsDrawer({ open, topics, saving, onClose, onSave }: { open: b
   const [draft, setDraft] = useState<string[]>(topics)
   useEffect(() => { if (open) setDraft(topics) }, [open, topics])
   return <Drawer title={<><span className="drawer-kicker">GITHUB FOCUS</span><strong>关注主题</strong></>} open={open} onClose={onClose} destroyOnHidden>
-    <p className="drawer-copy">设置关注主题后，自动发现将只在这些主题内拉取候选（官方 topic 精确匹配 + 名称/描述模糊匹配），从源头减少无用候选；列表页可按主题筛选。</p>
+    <p className="drawer-copy">设置你关心的方向，平台将在下一轮探索时按这些主题寻找并研究新项目。已进入历史报告的项目不会再次推荐。</p>
     <Space direction="vertical" style={{ width: '100%' }} size={16}>
       <Select mode="tags" value={draft} onChange={setDraft} style={{ width: '100%' }} placeholder="输入主题后回车，如 testing、rag" tokenSeparators={[',']} open={false} suffixIcon={null} aria-label="关注主题" />
       <Button type="primary" size="large" block loading={saving} onClick={() => onSave(draft.map((t) => t.trim()).filter(Boolean))}>保存关注主题</Button>

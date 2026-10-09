@@ -4,6 +4,7 @@ from pathlib import Path
 import pytest
 from alembic import command
 from alembic.config import Config
+from alembic.script import ScriptDirectory
 from sqlalchemy import create_engine, text
 
 from app.config import settings
@@ -20,9 +21,7 @@ def migration_config(output_buffer=None):
 
 
 @pytest.mark.parametrize("starting_revision", PARENT_REVISIONS)
-def test_postgres_expands_version_capacity_before_recording_merge(
-    monkeypatch, starting_revision
-):
+def test_postgres_expands_version_capacity_before_recording_merge(monkeypatch, starting_revision):
     monkeypatch.setattr(settings, "database_url", "postgresql+psycopg://localhost/unused")
     output = StringIO()
 
@@ -36,9 +35,7 @@ def test_postgres_expands_version_capacity_before_recording_merge(
 
 
 @pytest.mark.parametrize("starting_revision", PARENT_REVISIONS)
-def test_sqlite_upgrade_and_retry_preserve_existing_data(
-    monkeypatch, tmp_path, starting_revision
-):
+def test_sqlite_upgrade_and_retry_preserve_existing_data(monkeypatch, tmp_path, starting_revision):
     db_url = f"sqlite:///{tmp_path / 'migration.db'}"
     monkeypatch.setattr(settings, "database_url", db_url)
     config = migration_config()
@@ -46,19 +43,21 @@ def test_sqlite_upgrade_and_retry_preserve_existing_data(
     engine = create_engine(db_url)
     try:
         with engine.begin() as connection:
-            connection.execute(text(
-                "INSERT INTO users (id, username, password_hash, role, is_active, created_at) "
-                "VALUES (1, 'existing-user', 'test-only-hash', 'viewer', 1, '2026-09-01')"
-            ))
+            connection.execute(
+                text(
+                    "INSERT INTO users (id, username, password_hash, role, is_active, created_at) "
+                    "VALUES (1, 'existing-user', 'test-only-hash', 'viewer', 1, '2026-09-01')"
+                )
+            )
 
         command.upgrade(config, "head")
         command.upgrade(config, "head")
 
         with engine.connect() as connection:
-            revisions = connection.execute(
-                text("SELECT version_num FROM alembic_version")
-            ).scalars().all()
-            assert revisions == [MERGE_REVISION]
+            revisions = (
+                connection.execute(text("SELECT version_num FROM alembic_version")).scalars().all()
+            )
+            assert revisions == [ScriptDirectory.from_config(config).get_current_head()]
             assert connection.execute(text("SELECT username FROM users")).scalars().all() == [
                 "existing-user"
             ]

@@ -288,6 +288,18 @@ class GitHubDiscoverResponse(BaseModel):
     discovered: int
 
 
+class GitHubExplorationResponse(BaseModel):
+    model_config = ConfigDict(from_attributes=True)
+
+    status: Literal["never_run", "running", "completed", "failed"]
+    started_at: datetime | None = None
+    finished_at: datetime | None = None
+    next_run_at: datetime | None = None
+    discovered_count: int = 0
+    report_id: int | None = None
+    error_message: str | None = None
+
+
 class GitHubPreferenceResponse(BaseModel):
     topics: list[str]
 

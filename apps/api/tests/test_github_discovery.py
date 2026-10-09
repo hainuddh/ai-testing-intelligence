@@ -100,3 +100,18 @@ def test_build_topic_queries_skips_blank():
         "topic:ai stars:>=20",
         "ai in:name,description,topics stars:>=20",
     ]
+
+
+def test_build_topic_queries_normalizes_duplicate_terms():
+    assert build_topic_queries([" ai ", "ai", "", "rag", " rag "]) == [
+        "topic:ai stars:>=20",
+        "ai in:name,description,topics stars:>=20",
+        "topic:rag stars:>=20",
+        "rag in:name,description,topics stars:>=20",
+    ]
+
+
+def test_repo_from_search_item_preserves_stable_id_and_fork_flag():
+    repo = repo_from_search_item({"id": 123, "full_name": "a/b", "fork": True})
+    assert repo.github_id == 123
+    assert repo.fork is True

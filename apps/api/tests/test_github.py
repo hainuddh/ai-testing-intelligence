@@ -1,6 +1,7 @@
 from unittest.mock import patch
 
-from app.models import GitHubRepo, User
+from app.github_analysis import RepoIntel
+from app.models import GitHubRepo, GitHubReport, GitHubReportItem, User
 from app.security import create_access_token, hash_password
 
 
@@ -43,7 +44,13 @@ def _search_payload():
 
 def test_discover_creates_candidates(client, db_session):
     headers = auth_headers(db_session)
-    with patch("app.github_service.search_repositories", return_value=_search_payload()):
+    with (
+        patch("app.github_search.search_repositories", return_value=_search_payload()),
+        patch(
+            "app.github_service.analyze_repo_intel",
+            return_value=RepoIntel("摘要", "价值", ["回归"], ["试点"], 85, []),
+        ),
+    ):
         resp = client.post(
             "/api/v1/github/discover", json={"languages": ["python"]}, headers=headers
         )
@@ -120,7 +127,11 @@ def test_generate_and_list_report(client, db_session):
     db_session.commit()
     db_session.refresh(repo)
 
-    resp = client.post("/api/v1/github/reports/generate", headers=headers)
+    with patch(
+        "app.github_service.analyze_repo_intel",
+        return_value=RepoIntel("摘要", "价值", ["回归"], ["试点"], 85, []),
+    ):
+        resp = client.post("/api/v1/github/reports/generate", headers=headers)
     assert resp.status_code == 200
     assert resp.json()["report_type"] == "daily"
 
@@ -170,3 +181,62 @@ def test_list_repos_filters_by_topic(client, db_session):
     data = resp.json()
     assert data["total"] == 1
     assert data["items"][0]["full_name"] == "a/ai"
+
+
+def test_history_projects_are_excluded_from_every_candidate_filter(client, db_session):
+    headers = auth_headers(db_session)
+    old = GitHubRepo(
+        full_name="old/testing",
+        html_url="https://github.com/old/testing",
+        topics=["testing"],
+        status="watched",
+    )
+    fresh = GitHubRepo(
+        full_name="new/testing",
+        html_url="https://github.com/new/testing",
+        topics=["testing"],
+        status="watched",
+    )
+    report = GitHubReport(title="历史报告", body_markdown="旧研究")
+    db_session.add_all([old, fresh, report])
+    db_session.flush()
+    report.items.append(GitHubReportItem(repo_id=old.id))
+    db_session.commit()
+    for query in ["", "?status=watched", "?topic=testing"]:
+        response = client.get("/api/v1/github/repos" + query, headers=headers)
+        assert [item["id"] for item in response.json()["items"]] == [fresh.id]
+    history = client.get(f"/api/v1/github/reports/{report.id}", headers=headers)
+    assert history.json()["body_markdown"] == "旧研究"
+
+
+def test_exploration_status_is_read_only_and_available_to_viewer(client, db_session):
+    headers = auth_headers(db_session, role="viewer")
+    with patch("app.github_service.discover_candidates") as discover:
+        response = client.get("/api/v1/github/exploration", headers=headers)
+    assert response.status_code == 200
+    assert response.json()["status"] == "never_run"
+    assert response.json()["next_run_at"] is None
+    discover.assert_not_called()
+    assert client.post("/api/v1/github/discover", json={}, headers=headers).status_code == 403
+
+
+def test_generating_without_new_projects_does_not_publish_empty_report(client, db_session):
+    headers = auth_headers(db_session)
+    response = client.post("/api/v1/github/reports/generate", headers=headers)
+    assert response.status_code == 200
+    assert response.json() is None
+    assert db_session.query(GitHubReport).count() == 0
+
+
+def test_existing_daily_report_is_reused_after_unrelated_exploration_failure(client, db_session):
+    from app.models import GitHubExplorationState
+
+    headers = auth_headers(db_session)
+    report = GitHubReport(title="已发布日报", body_markdown="历史正文", status="ready")
+    db_session.add(report)
+    db_session.add(GitHubExplorationState(id=1, status="failed", error_message="稍后重试"))
+    db_session.commit()
+    response = client.post("/api/v1/github/reports/generate", headers=headers)
+    assert response.status_code == 200
+    assert response.json()["id"] == report.id
+    assert db_session.query(GitHubReport).count() == 1

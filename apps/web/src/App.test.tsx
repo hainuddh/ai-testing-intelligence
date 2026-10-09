@@ -19,6 +19,31 @@ const json = (data: unknown, status = 200) => new Response(JSON.stringify(data),
   headers: { 'Content-Type': 'application/json' },
 })
 
+const exploration: {
+  status: string; started_at: string | null; finished_at: string | null; next_run_at: string | null;
+  discovered_count: number; report_id: number | null; error_message: string | null;
+} = {
+  status: 'never_run', started_at: null, finished_at: null, next_run_at: null,
+  discovered_count: 0, report_id: null, error_message: null,
+}
+
+const githubReport = {
+  id: 4, report_type: 'daily', title: 'GitHub 项目研究 2026-10-09',
+  body_markdown: '# GitHub 项目研究 2026-10-09\n\n**项目摘要**\n自动探索得到的项目\n\n**测试价值分析**\n提高回归效率\n\n**应用场景推荐**\n- 回归测试\n\n**落地建议**\n- 小规模试点',
+  status: 'ready', generated_at: '2026-10-09T00:00:00Z', items: [],
+}
+
+function mockGithubPage({ status = exploration, reports = [githubReport], role = 'maintainer' } = {}) {
+  return vi.spyOn(globalThis, 'fetch').mockImplementation(async (input) => {
+    const path = String(input)
+    if (path === '/api/v1/auth/me') return json({ id: 'user-2', username: 'reader', role })
+    if (path === '/api/v1/github/exploration') return json(status)
+    if (path === '/api/v1/github/reports') return json({ items: reports, total: reports.length })
+    if (path === '/api/v1/github/preferences') return json({ topics: ['testing'] })
+    return json({ items: [], total: 0 })
+  })
+}
+
 describe('management radar workflow', () => {
   beforeEach(() => {
     vi.restoreAllMocks()
@@ -348,6 +373,7 @@ describe('management radar workflow', () => {
       .mockResolvedValueOnce(json({ items: [], total: 0 }))
       .mockResolvedValueOnce(json({ items: [], total: 0 }))
       .mockResolvedValueOnce(json({ topics: [] }))
+      .mockResolvedValueOnce(json(exploration))
       .mockResolvedValueOnce(json({ detail: [{ loc: ['body', 'topics'], msg: 'Input should be a valid list' }] }, 422))
     render(<App />)
     await screen.findByRole('heading', { name: '内容情报' })
@@ -562,12 +588,14 @@ describe('management radar workflow', () => {
       .mockResolvedValueOnce(json({ items: [repo], total: 1 }))
       .mockResolvedValueOnce(json({ items: [], total: 0 }))
       .mockResolvedValueOnce(json({ topics: [] }))
+      .mockResolvedValueOnce(json(exploration))
       .mockResolvedValueOnce(json({ ...repo, status: nextStatus }))
       .mockResolvedValueOnce(json({ items: [{ ...repo, status: nextStatus }], total: 1 }))
 
     render(<App />)
     await screen.findByRole('heading', { name: '内容情报' })
     await user.click(screen.getByRole('button', { name: 'GitHub 追踪' }))
+    await user.click(screen.getByText('候选管理'))
     await screen.findByText('acme/awesome-agent')
     await user.click(screen.getByRole('button', { name: new RegExp(`${action}$`) }))
 
@@ -578,62 +606,102 @@ describe('management radar workflow', () => {
     })))
   })
 
-  it('discovers GitHub candidates with a JSON request body', async () => {
+  it('opens the latest GitHub research without triggering discovery or report generation', async () => {
     localStorage.setItem('access_token', 'existing-token')
-    const user = userEvent.setup()
-    const fetchMock = vi.spyOn(globalThis, 'fetch')
-      .mockResolvedValueOnce(json({ id: 'user-2', username: 'maintainer', role: 'maintainer' }))
-      .mockResolvedValueOnce(json({ items: [], total: 0 }))
-      .mockResolvedValueOnce(json({ items: [], total: 0 }))
-      .mockResolvedValueOnce(json({ items: [], total: 0 }))
-      .mockResolvedValueOnce(json({ topics: [] }))
-      .mockResolvedValueOnce(json({ discovered: 0 }))
-      .mockResolvedValueOnce(json({ items: [], total: 0 }))
+    const fetchMock = mockGithubPage()
     render(<App />)
     await screen.findByRole('heading', { name: '内容情报' })
-    await user.click(screen.getByRole('button', { name: 'GitHub 追踪' }))
-    await user.click(await screen.findByRole('button', { name: /立即发现候选/ }))
-    await waitFor(() => expect(fetchMock).toHaveBeenCalledWith('/api/v1/github/discover', expect.objectContaining({
-      method: 'POST',
-      headers: expect.objectContaining({ 'Content-Type': 'application/json', Authorization: 'Bearer existing-token' }),
-      body: '{}',
-    })))
-    await waitFor(() => expect(fetchMock.mock.calls.at(-1)?.[0]).toBe('/api/v1/github/repos?'))
+    await userEvent.click(screen.getByRole('button', { name: 'GitHub 追踪' }))
+    expect(await screen.findByText('自动探索得到的项目')).toBeInTheDocument()
+    expect(within(screen.getByRole('article')).getAllByRole('heading', { name: githubReport.title })).toHaveLength(1)
+    expect(screen.getByText(/进入过历史报告的项目不会再次推荐/)).toBeInTheDocument()
+    expect(screen.queryByRole('button', { name: /立即发现候选|生成今日日报/ })).not.toBeInTheDocument()
+    expect(fetchMock.mock.calls.every(([, init]) => !init?.method || init.method === 'GET')).toBe(true)
+    expect(screen.getByText('候选管理').closest('details')).not.toHaveAttribute('open')
   })
 
-  it('generates a GitHub daily report', async () => {
+  it.each([
+    ['never_run', '等待平台首次自动探索'],
+    ['running', '平台正在探索和分析新项目'],
+    ['completed', '本轮暂无符合条件的新项目'],
+    ['failed', '本轮探索失败，平台会自动重试'],
+  ])('shows the GitHub %s exploration state without exposing internal errors', async (status, message) => {
     localStorage.setItem('access_token', 'existing-token')
-    const user = userEvent.setup()
-    const report = {
-      id: 3,
-      report_type: 'daily',
-      title: 'GitHub 项目日报 2026-09-10',
-      body_markdown: '# GitHub 项目日报',
-      status: 'ready',
-      generated_at: '2026-09-10T00:00:00Z',
-      items: [],
-    }
-    const fetchMock = vi.spyOn(globalThis, 'fetch')
-      .mockResolvedValueOnce(json({ id: 'user-2', username: 'maintainer', role: 'maintainer' }))
-      .mockResolvedValueOnce(json({ items: [], total: 0 }))
-      .mockResolvedValueOnce(json({ items: [], total: 0 }))
-      .mockResolvedValueOnce(json({ items: [], total: 0 }))
-      .mockResolvedValueOnce(json({ topics: [] }))
-      .mockResolvedValueOnce(json(report, 201))
-      .mockResolvedValueOnce(json({ items: [report], total: 1 }))
-
+    mockGithubPage({ status: { ...exploration, status, error_message: 'secret-upstream-token' } as typeof exploration, reports: [] })
     render(<App />)
     await screen.findByRole('heading', { name: '内容情报' })
-    await user.click(screen.getByRole('button', { name: 'GitHub 追踪' }))
-    await user.click(screen.getByRole('button', { name: /生成今日日报/ }))
-
-    await waitFor(() => expect(fetchMock).toHaveBeenCalledWith('/api/v1/github/reports/generate', expect.objectContaining({
-      method: 'POST',
-      headers: expect.objectContaining({ 'Content-Type': 'application/json', Authorization: 'Bearer existing-token' }),
-      body: '{}',
-    })))
+    await userEvent.click(screen.getByRole('button', { name: 'GitHub 追踪' }))
+    expect(await screen.findByText(message)).toBeInTheDocument()
+    expect(screen.queryByText('secret-upstream-token')).not.toBeInTheDocument()
+    expect(screen.getByText(/最近探索/)).toBeInTheDocument()
+    expect(screen.getByText(/下次探索/)).toBeInTheDocument()
   })
 
+  it('refreshes completed research with GET requests only and reloads after changing pages', async () => {
+    localStorage.setItem('access_token', 'existing-token')
+    const fetchMock = mockGithubPage({ reports: [] })
+    render(<App />)
+    await screen.findByRole('heading', { name: '内容情报' })
+    await userEvent.click(screen.getByRole('button', { name: 'GitHub 追踪' }))
+    await screen.findByText('等待平台首次自动探索')
+    fetchMock.mockImplementation(async (input) => {
+      if (String(input) === '/api/v1/github/exploration') return json({ ...exploration, status: 'completed', report_id: 4 })
+      if (String(input) === '/api/v1/github/reports') return json({ items: [githubReport], total: 1 })
+      if (String(input) === '/api/v1/github/preferences') return json({ topics: [] })
+      return json({ items: [], total: 0 })
+    })
+    await userEvent.click(screen.getByRole('button', { name: '刷新结果' }))
+    expect(await screen.findByText('自动探索得到的项目')).toBeInTheDocument()
+    expect(await screen.findByText('本轮研究已完成')).toBeInTheDocument()
+    await userEvent.click(screen.getByRole('button', { name: '内容情报' }))
+    await userEvent.click(screen.getByRole('button', { name: 'GitHub 追踪' }))
+    await waitFor(() => expect(fetchMock.mock.calls.filter(([url]) => url === '/api/v1/github/exploration')).toHaveLength(3))
+    expect(fetchMock.mock.calls.every(([, init]) => !init?.method || init.method === 'GET')).toBe(true)
+  })
+
+  it('keeps GitHub preferences and candidate mutations unavailable to viewers', async () => {
+    localStorage.setItem('access_token', 'existing-token')
+    mockGithubPage({ role: 'viewer' })
+    render(<App />)
+    await screen.findByRole('heading', { name: '内容情报' })
+    await userEvent.click(screen.getByRole('button', { name: 'GitHub 追踪' }))
+    await screen.findByText('自动探索得到的项目')
+    expect(screen.getByText('testing')).toBeInTheDocument()
+    expect(screen.queryByRole('button', { name: /关注主题|关注$|忽略$/ })).not.toBeInTheDocument()
+    expect(screen.queryByText('候选管理')).not.toBeInTheDocument()
+  })
+
+  it('opens historical research and downloads the selected Markdown', async () => {
+    localStorage.setItem('access_token', 'existing-token')
+    const olderReport = { ...githubReport, id: 3, title: '历史研究 2026-10-08', body_markdown: '# 历史研究正文', generated_at: '2026-10-08T00:00:00Z' }
+    mockGithubPage({ reports: [githubReport, olderReport] })
+    const createObjectURL = vi.fn((_blob: Blob) => 'blob:github-report')
+    const revokeObjectURL = vi.fn()
+    Object.defineProperty(URL, 'createObjectURL', { configurable: true, value: createObjectURL })
+    Object.defineProperty(URL, 'revokeObjectURL', { configurable: true, value: revokeObjectURL })
+    const clickSpy = vi.spyOn(HTMLAnchorElement.prototype, 'click').mockImplementation(() => {})
+    render(<App />)
+    await screen.findByRole('heading', { name: '内容情报' })
+    await userEvent.click(screen.getByRole('button', { name: 'GitHub 追踪' }))
+    await screen.findByText('自动探索得到的项目')
+    await userEvent.click(screen.getByText('历史报告'))
+    await userEvent.click(screen.getByRole('button', { name: '查看 历史研究 2026-10-08' }))
+    const dialog = (await screen.findByText('历史研究正文')).closest('[role="dialog"]') as HTMLElement
+    expect(dialog).toBeInTheDocument()
+    expect(within(dialog).getByText('历史研究正文')).toBeInTheDocument()
+    await userEvent.click(within(dialog).getByRole('button', { name: /下载 Markdown/ }))
+    expect(createObjectURL).toHaveBeenCalledOnce()
+    const blob = createObjectURL.mock.calls[0][0] as Blob
+    const contents = await new Promise<string>((resolve) => {
+      const reader = new FileReader()
+      reader.onload = () => resolve(String(reader.result))
+      reader.readAsText(blob)
+    })
+    expect(contents).toBe('# 历史研究正文')
+    expect(clickSpy).toHaveBeenCalledOnce()
+    expect(clickSpy.mock.instances[0]).toHaveAttribute('download', 'github-report-3.md')
+    await waitFor(() => expect(revokeObjectURL).toHaveBeenCalledWith('blob:github-report'))
+  })
   it.each(['', '{Enter}'])('saves AI testing as a GitHub topic with JSON headers (suffix %j)', async (suffix) => {
     localStorage.setItem('access_token', 'existing-token')
     const user = userEvent.setup()
@@ -643,6 +711,7 @@ describe('management radar workflow', () => {
       .mockResolvedValueOnce(json({ items: [], total: 0 }))
       .mockResolvedValueOnce(json({ items: [], total: 0 }))
       .mockResolvedValueOnce(json({ topics: [] }))
+      .mockResolvedValueOnce(json(exploration))
       .mockResolvedValueOnce(json({ topics: ['AI testing'] }))
 
     render(<App />)
@@ -678,12 +747,12 @@ describe('management radar workflow', () => {
       .mockResolvedValueOnce(json({ items: [], total: 0 }))
       .mockResolvedValueOnce(json({ items: [report], total: 1 }))
       .mockResolvedValueOnce(json({ topics: [] }))
+      .mockResolvedValueOnce(json(exploration))
 
     render(<App />)
     await screen.findByRole('heading', { name: '内容情报' })
     await user.click(screen.getByRole('button', { name: 'GitHub 追踪' }))
-    await screen.findByText('GitHub 项目日报 2026-09-10')
-    await user.click(screen.getByRole('button', { name: /查\s*看/ }))
+    await screen.findByRole('heading', { name: 'GitHub 项目日报 2026-09-10', level: 3 })
 
     const link = await screen.findByRole('link', { name: 'https://github.com/acme/deep' })
     expect(link).toHaveAttribute('href', 'https://github.com/acme/deep')

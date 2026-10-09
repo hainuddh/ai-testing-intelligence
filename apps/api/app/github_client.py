@@ -5,6 +5,10 @@
 
 from __future__ import annotations
 
+import math
+from datetime import UTC, datetime
+from email.utils import parsedate_to_datetime
+
 import httpx
 
 from app.config import settings
@@ -37,9 +41,10 @@ def search_repositories(
     client: httpx.Client | None = None,
     page: int = 1,
     per_page: int = 100,
+    sort: str = "stars",
 ) -> dict:
     url = f"{GITHUB_API_BASE}/search/repositories"
-    params = {"q": query, "sort": "stars", "order": "desc", "page": page, "per_page": per_page}
+    params = {"q": query, "sort": sort, "order": "desc", "page": page, "per_page": per_page}
     if client is None:
         with httpx.Client(timeout=settings.fetch_timeout_seconds) as client:
             return _get_json(client, url, params)
@@ -52,3 +57,24 @@ def get_repository(full_name: str, *, client: httpx.Client | None = None) -> dic
         with httpx.Client(timeout=settings.fetch_timeout_seconds) as client:
             return _get_json(client, url, None)
     return _get_json(client, url, None)
+
+
+def retry_after_seconds(error: httpx.HTTPStatusError, *, now: datetime) -> int:
+    headers = error.response.headers
+    delays = [60]
+    value = headers.get("Retry-After", "")
+    try:
+        delays.append(math.ceil(float(value)))
+    except (ValueError, OverflowError):
+        try:
+            retry_at = parsedate_to_datetime(value)
+            delays.append(
+                math.ceil((retry_at.replace(tzinfo=retry_at.tzinfo or UTC) - now).total_seconds())
+            )
+        except (ValueError, TypeError, OverflowError):
+            pass
+    try:
+        delays.append(math.ceil(float(headers.get("X-RateLimit-Reset", "")) - now.timestamp()))
+    except (ValueError, OverflowError):
+        pass
+    return max(delays)

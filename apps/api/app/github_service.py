@@ -2,48 +2,22 @@
 
 from __future__ import annotations
 
-from datetime import UTC, datetime, timedelta
+from datetime import UTC, datetime, timedelta, timezone
+from uuid import uuid4
 
 import httpx
-from sqlalchemy import func, select
+from sqlalchemy import or_, select, update
 from sqlalchemy.orm import Session
 
+from app.config import settings
 from app.github_analysis import analyze_repo_intel
-from app.github_client import search_repositories
-from app.github_discovery import (
-    build_discovery_queries,
-    build_topic_queries,
-    estimate_star_deltas,
-    repo_from_search_item,
-    score_candidate,
+from app.models import (
+    GitHubExplorationState,
+    GitHubPreference,
+    GitHubRepo,
+    GitHubReport,
+    GitHubReportItem,
 )
-from app.github_momentum import Momentum
-from app.models import GitHubPreference, GitHubRepo, GitHubReport, GitHubReportItem
-
-
-def upsert_repo(db: Session, repo, momentum: Momentum, *, now: datetime) -> GitHubRepo:
-    obj = db.scalar(select(GitHubRepo).where(GitHubRepo.full_name == repo.full_name))
-    if obj is None:
-        obj = GitHubRepo(full_name=repo.full_name, status="discovered", first_seen_at=now)
-        db.add(obj)
-
-    obj.description = repo.description
-    obj.html_url = repo.html_url
-    obj.primary_language = repo.language
-    obj.topics = repo.topics
-    obj.homepage = repo.homepage
-    obj.license_name = repo.license_name
-    obj.archived = repo.archived
-    obj.stars = repo.stars
-    obj.forks = repo.forks
-    obj.open_issues = repo.open_issues
-    obj.watchers = repo.watchers
-    obj.repo_created_at = repo.created_at
-    obj.repo_pushed_at = repo.pushed_at
-    obj.momentum_score = momentum.score
-    obj.momentum_tier = momentum.tier
-    obj.last_seen_at = now
-    return obj
 
 
 def discover_candidates(
@@ -56,31 +30,18 @@ def discover_candidates(
     client: httpx.Client | None = None,
     now: datetime | None = None,
 ) -> int:
-    """通过 GitHub Search API 自动发现候选并 upsert，返回处理的候选数量。
+    """Discover only new candidates; transaction ownership stays with the caller."""
+    from app.github_search import discover_new_candidates
 
-    配置了关注主题时按主题（topic 精确 + 关键词模糊）发现；否则退回按语言发现。
-    """
-    now = now or datetime.now(UTC)
-    queries = (
-        build_topic_queries(topics, stars_min)
-        if topics
-        else build_discovery_queries(languages, stars_min)
+    return discover_new_candidates(
+        db,
+        languages,
+        stars_min=stars_min,
+        per_language=per_language,
+        topics=topics,
+        client=client,
+        now=now,
     )
-    count = 0
-    for query in queries:
-        try:
-            payload = search_repositories(query, client=client, per_page=per_language)
-        except httpx.HTTPError:
-            continue
-        for item in payload.get("items") or []:
-            repo = repo_from_search_item(item)
-            created_at = repo.created_at or now
-            d24, d7 = estimate_star_deltas(repo.stars, created_at, now)
-            momentum = score_candidate(repo.stars, d24, d7, repo.pushed_at, now)
-            upsert_repo(db, repo, momentum, now=now)
-            count += 1
-    db.commit()
-    return count
 
 
 def _normalize_topics(topics: list[str]) -> list[str]:
@@ -120,22 +81,18 @@ def set_repo_status(db: Session, repo_id: int, status: str) -> GitHubRepo | None
     return obj
 
 
-def discovery_due(
-    db: Session, *, now: datetime | None = None, interval_hours: int = 24
-) -> bool:
-    """判断是否该再次触发自动发现（距上次发现超过 interval_hours，或从未发现过）。"""
+def discovery_due(db: Session, *, now: datetime | None = None, interval_hours: int = 24) -> bool:
+    """Scheduling is independent of repository updates, including empty runs."""
     now = now or datetime.now(UTC)
-    latest = db.scalar(select(func.max(GitHubRepo.last_seen_at)))
-    if latest is None:
+    state = get_exploration_state(db)
+    if state.status == "running":
+        return state.started_at is None or _utc(state.started_at) <= now - LEASE_DURATION
+    if state.next_run_at is None:
         return True
-    if latest.tzinfo is None:
-        latest = latest.replace(tzinfo=UTC)
-    return now - latest >= timedelta(hours=interval_hours)
+    return _utc(state.next_run_at) <= now
 
 
-def ensure_repo_intel(
-    db: Session, repo: GitHubRepo, *, client: httpx.Client | None = None
-) -> bool:
+def ensure_repo_intel(db: Session, repo: GitHubRepo, *, client: httpx.Client | None = None) -> bool:
     """确保仓库已有深度情报分析：已分析则复用，未配置或失败则降级跳过。"""
     if repo.intel_status == "analyzed" and repo.intel_summary:
         return True
@@ -191,49 +148,297 @@ def render_daily_markdown(title: str, repos: list[GitHubRepo]) -> str:
     return "\n".join(lines).rstrip() + "\n"
 
 
-def generate_daily_report(
-    db: Session,
-    *,
-    now: datetime | None = None,
-    top_n: int = 20,
-    client: httpx.Client | None = None,
-) -> GitHubReport:
-    now = now or datetime.now(UTC)
-    repos = list(
-        db.scalars(
-            select(GitHubRepo)
-            .where(GitHubRepo.status.in_(["watched", "tracked"]))
-            .order_by(GitHubRepo.momentum_score.desc())
-            .limit(top_n)
-        ).all()
+# Shanghai has no DST; a fixed offset also works without OS tzdata on Windows.
+BUSINESS_TZ = timezone(timedelta(hours=8))
+LEASE_DURATION = timedelta(hours=1)
+
+
+class ExplorationLeaseLost(RuntimeError):
+    pass
+
+
+def _utc(value: datetime) -> datetime:
+    return value.replace(tzinfo=value.tzinfo or UTC)
+
+
+def unreported_repo():
+    return ~select(GitHubReportItem.id).where(GitHubReportItem.repo_id == GitHubRepo.id).exists()
+
+
+def get_exploration_state(db: Session) -> GitHubExplorationState:
+    state = db.get(GitHubExplorationState, 1, populate_existing=True)
+    return state or GitHubExplorationState(
+        id=1, status="never_run", discovered_count=0, search_cursors={}
     )
 
-    for repo in repos:
-        ensure_repo_intel(db, repo, client=client)
 
+def claim_exploration(db: Session, *, now: datetime, force: bool = False) -> str | None:
+    # A singleton compare-and-swap works across both API/worker processes and DBs.
+    dialect = db.get_bind().dialect.name
+    if dialect == "postgresql":
+        from sqlalchemy.dialects.postgresql import insert
+    else:
+        from sqlalchemy.dialects.sqlite import insert
+    db.execute(
+        insert(GitHubExplorationState)
+        .values(id=1, status="never_run", discovered_count=0, search_cursors={})
+        .on_conflict_do_nothing(index_elements=["id"])
+    )
+    available = or_(
+        GitHubExplorationState.status != "running",
+        GitHubExplorationState.started_at <= now - LEASE_DURATION,
+    )
+    conditions = [GitHubExplorationState.id == 1, available]
+    if not force:
+        conditions.append(
+            or_(
+                GitHubExplorationState.next_run_at.is_(None),
+                GitHubExplorationState.next_run_at <= now,
+                GitHubExplorationState.status == "running",
+            )
+        )
+    token = uuid4().hex
+    result = db.execute(
+        update(GitHubExplorationState)
+        .where(*conditions)
+        .values(
+            status="running",
+            started_at=now,
+            finished_at=None,
+            lease_token=token,
+            discovered_count=0,
+            report_id=None,
+            error_message=None,
+        )
+        .execution_options(synchronize_session=False)
+    )
+    db.commit()
+    db.expire_all()
+    return token if result.rowcount else None
+
+
+def finish_exploration(
+    db: Session,
+    token: str,
+    *,
+    now: datetime,
+    report: GitHubReport | None,
+    discovered: int,
+    error: str | None = None,
+    retry_seconds: int = 3600,
+) -> None:
+    # The conditional write locks the lease until publication commits. A stale
+    # process must never publish results after a replacement has claimed it.
+    with db.no_autoflush:
+        result = db.execute(
+            update(GitHubExplorationState)
+            .where(
+                GitHubExplorationState.id == 1,
+                GitHubExplorationState.lease_token == token,
+            )
+            .values(
+                status="failed" if error else "completed",
+                finished_at=now,
+                next_run_at=now
+                + (timedelta(seconds=retry_seconds) if error else timedelta(hours=24)),
+                discovered_count=discovered,
+                error_message=error,
+                lease_token=None,
+            )
+            .execution_options(synchronize_session=False)
+        )
+    if not result.rowcount:
+        db.rollback()
+        raise ExplorationLeaseLost("GitHub exploration was claimed by another worker")
+    db.flush()
+    db.execute(
+        update(GitHubExplorationState)
+        .where(GitHubExplorationState.id == 1)
+        .values(report_id=report.id if report else None)
+        .execution_options(synchronize_session=False)
+    )
+    db.commit()
+    db.expire_all()
+
+
+def _report_for_day(db: Session, now: datetime) -> GitHubReport | None:
+    day = now.astimezone(BUSINESS_TZ).date()
+    # Include old reports without report_key to avoid republishing on upgrade day.
+    start = datetime.combine(day, datetime.min.time(), tzinfo=BUSINESS_TZ).astimezone(UTC)
+    return db.scalar(
+        select(GitHubReport)
+        .where(
+            GitHubReport.report_type == "daily",
+            or_(
+                GitHubReport.report_key == f"daily:{day}",
+                (GitHubReport.generated_at >= start)
+                & (GitHubReport.generated_at < start + timedelta(days=1)),
+            ),
+        )
+        .order_by(GitHubReport.generated_at.desc())
+        .limit(1)
+    )
+
+
+def _matches_topics(repo: GitHubRepo, topics: list[str]) -> bool:
+    text = " ".join([repo.full_name, repo.description or "", *(repo.topics or [])]).casefold()
+    return not topics or any(topic.casefold() in text for topic in topics)
+
+
+def _build_daily_report(
+    db: Session,
+    *,
+    now: datetime,
+    top_n: int = 5,
+    client: httpx.Client | None = None,
+) -> tuple[GitHubReport | None, bool]:
+    existing = _report_for_day(db, now)
+    if existing:
+        return existing, False
+    topics = get_topics(db)
+    candidates = db.scalars(
+        select(GitHubRepo)
+        .where(
+            GitHubRepo.status != "ignored",
+            GitHubRepo.archived.is_(False),
+            unreported_repo(),
+            or_(
+                GitHubRepo.intel_status != "analyzed",
+                GitHubRepo.testing_value_score >= settings.testing_relevance_threshold,
+            ),
+        )
+        .order_by(GitHubRepo.momentum_score.desc(), GitHubRepo.stars.desc(), GitHubRepo.id)
+    ).all()
+    selected: list[GitHubRepo] = []
+    attempted = 0
+    failed = False
+    for candidate in candidates:
+        if not _matches_topics(candidate, topics):
+            continue
+        attempted += 1
+        if ensure_repo_intel(db, candidate, client=client):
+            if (candidate.testing_value_score or 0) >= settings.testing_relevance_threshold:
+                selected.append(candidate)
+        else:
+            failed = True
+        if len(selected) >= min(top_n, 5) or attempted >= 10:
+            break
+    if not selected:
+        return None, failed
+    day = now.astimezone(BUSINESS_TZ).date()
     report = GitHubReport(
+        report_key=f"daily:{day}",
         report_type="daily",
-        title=f"GitHub 项目日报 {now:%Y-%m-%d}",
+        title=f"GitHub 项目日报 {day}",
         period_start=now - timedelta(days=1),
         period_end=now,
         status="ready",
         generated_at=now,
     )
     db.add(report)
-    db.flush()
-
-    for rank, repo in enumerate(repos, 1):
+    for rank, candidate in enumerate(selected, 1):
         report.items.append(
             GitHubReportItem(
-                repo_id=repo.id,
+                repo_id=candidate.id,
                 rank=rank,
-                momentum_score=repo.momentum_score,
-                momentum_tier=repo.momentum_tier,
-                highlight=repo.summary,
+                momentum_score=candidate.momentum_score,
+                momentum_tier=candidate.momentum_tier,
+                highlight=candidate.intel_summary,
             )
         )
+    report.body_markdown = render_daily_markdown(report.title, selected)
+    return report, False
 
-    report.body_markdown = render_daily_markdown(report.title, repos)
-    db.commit()
-    db.refresh(report)
-    return report
+
+def run_github_exploration(
+    db: Session,
+    *,
+    now: datetime | None = None,
+    force: bool = False,
+    discover: bool = True,
+    languages: list[str] | None = None,
+    topics: list[str] | None = None,
+    client: httpx.Client | None = None,
+    top_n: int = 5,
+) -> GitHubExplorationState:
+    started = now or datetime.now(UTC)
+    token = claim_exploration(db, now=started, force=force)
+    if token is None:
+        return get_exploration_state(db)
+    count = 0
+    try:
+        if discover:
+            count = discover_candidates(
+                db,
+                languages or settings.github_discovery_languages_list,
+                topics=get_topics(db) if topics is None else topics,
+                client=client,
+                now=started,
+            )
+            # Keep search progress if analysis needs a later retry.
+            with db.no_autoflush:
+                lease = db.execute(
+                    update(GitHubExplorationState)
+                    .where(
+                        GitHubExplorationState.id == 1,
+                        GitHubExplorationState.lease_token == token,
+                    )
+                    .values(lease_token=token)
+                    .execution_options(synchronize_session=False)
+                )
+            if not lease.rowcount:
+                raise ExplorationLeaseLost("Search lease was replaced")
+            db.commit()
+        report, failed = _build_daily_report(db, now=started, top_n=top_n, client=client)
+        finish_exploration(
+            db,
+            token,
+            now=now or datetime.now(UTC),
+            report=report,
+            discovered=count,
+            error="项目分析暂未完成，平台将在稍后自动重试。" if failed else None,
+        )
+    except ExplorationLeaseLost:
+        db.rollback()
+    except Exception as exc:
+        db.rollback()
+        retry_seconds = 3600
+        if isinstance(exc, httpx.HTTPStatusError):
+            from app.github_client import retry_after_seconds
+
+            retry_seconds = max(retry_seconds, retry_after_seconds(exc, now=started) or 0)
+        try:
+            finish_exploration(
+                db,
+                token,
+                now=now or datetime.now(UTC),
+                report=None,
+                discovered=count,
+                error="自动探索暂未完成，平台将在稍后自动重试。",
+                retry_seconds=retry_seconds,
+            )
+        except ExplorationLeaseLost:
+            db.rollback()
+    return get_exploration_state(db)
+
+
+def generate_daily_report(
+    db: Session,
+    *,
+    now: datetime | None = None,
+    top_n: int = 5,
+    client: httpx.Client | None = None,
+) -> GitHubReport | None:
+    now = now or datetime.now(UTC)
+    existing = _report_for_day(db, now)
+    if existing:
+        return existing
+    state = run_github_exploration(
+        db,
+        now=now,
+        force=True,
+        discover=False,
+        top_n=top_n,
+        client=client,
+    )
+    return db.get(GitHubReport, state.report_id) if state.report_id else None

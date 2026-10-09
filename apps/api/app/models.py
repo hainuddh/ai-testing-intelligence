@@ -3,6 +3,7 @@ from datetime import UTC, datetime
 
 from sqlalchemy import (
     JSON,
+    BigInteger,
     Boolean,
     DateTime,
     Float,
@@ -149,6 +150,7 @@ class GitHubRepo(Base):
     __tablename__ = "github_repos"
 
     id: Mapped[int] = mapped_column(primary_key=True)
+    github_id: Mapped[int | None] = mapped_column(BigInteger, nullable=True, unique=True)
     full_name: Mapped[str] = mapped_column(String(255), unique=True, index=True)
     description: Mapped[str | None] = mapped_column(Text, nullable=True)
     html_url: Mapped[str] = mapped_column(String(2048))
@@ -208,6 +210,7 @@ class GitHubReport(Base):
     __tablename__ = "github_reports"
 
     id: Mapped[int] = mapped_column(primary_key=True)
+    report_key: Mapped[str | None] = mapped_column(String(64), nullable=True, unique=True)
     report_type: Mapped[str] = mapped_column(String(30), default="daily", index=True)
     period_start: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
     period_end: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
@@ -247,3 +250,18 @@ class GitHubPreference(Base):
     updated_at: Mapped[datetime] = mapped_column(
         DateTime(timezone=True), default=utc_now, onupdate=utc_now
     )
+
+
+class GitHubExplorationState(Base):
+    __tablename__ = "github_exploration_state"
+
+    id: Mapped[int] = mapped_column(primary_key=True)
+    status: Mapped[str] = mapped_column(String(30), default="never_run")
+    started_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
+    finished_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
+    next_run_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
+    lease_token: Mapped[str | None] = mapped_column(String(64), nullable=True)
+    discovered_count: Mapped[int] = mapped_column(Integer, default=0)
+    report_id: Mapped[int | None] = mapped_column(ForeignKey("github_reports.id"), nullable=True)
+    error_message: Mapped[str | None] = mapped_column(Text, nullable=True)
+    search_cursors: Mapped[dict] = mapped_column(JSON, default=dict)

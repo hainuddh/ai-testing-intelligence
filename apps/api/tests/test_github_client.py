@@ -1,3 +1,5 @@
+from datetime import UTC, datetime
+
 import httpx
 import pytest
 
@@ -54,3 +56,39 @@ def test_build_headers_with_token(monkeypatch):
     monkeypatch.setattr(settings, "github_token", "ghp_test")
     headers = build_headers()
     assert headers["Authorization"] == "Bearer ghp_test"
+
+
+def test_search_repositories_allows_updated_sort_and_pagination():
+    def handler(request: httpx.Request):
+        assert dict(request.url.params) == {
+            "q": "language:python",
+            "sort": "updated",
+            "order": "desc",
+            "page": "3",
+            "per_page": "30",
+        }
+        return httpx.Response(200, json={"items": []})
+
+    search_repositories(
+        "language:python", client=_client(handler), sort="updated", page=3, per_page=30
+    )
+
+
+@pytest.mark.parametrize(
+    ("headers", "expected"),
+    [
+        ({"Retry-After": "120"}, 120),
+        ({"X-RateLimit-Reset": "1768003500"}, 300),
+        ({"Retry-After": "120", "X-RateLimit-Reset": "1768003500"}, 300),
+        ({"Retry-After": "Sat, 10 Jan 2026 00:02:00 GMT"}, 120),
+        ({"Retry-After": "bad", "X-RateLimit-Reset": "bad"}, 60),
+        ({}, 60),
+    ],
+)
+def test_rate_limit_retry_delay_respects_response_headers(headers, expected):
+    from app.github_client import retry_after_seconds
+
+    request = httpx.Request("GET", "https://api.github.com/search/repositories")
+    response = httpx.Response(429, headers=headers, request=request)
+    error = httpx.HTTPStatusError("rate limited", request=request, response=response)
+    assert retry_after_seconds(error, now=datetime(2026, 1, 10, tzinfo=UTC)) == expected

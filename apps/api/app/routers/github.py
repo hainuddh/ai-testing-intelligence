@@ -4,16 +4,19 @@ from sqlalchemy import Text, func, select
 from app.config import settings
 from app.dependencies import CurrentUser, DbSession, MaintainerUser
 from app.github_service import (
-    discover_candidates,
     generate_daily_report,
+    get_exploration_state,
     get_topics,
+    run_github_exploration,
     set_repo_status,
     set_topics,
+    unreported_repo,
 )
 from app.models import GitHubRepo, GitHubReport
 from app.schemas import (
     GitHubDiscoverRequest,
     GitHubDiscoverResponse,
+    GitHubExplorationResponse,
     GitHubPreferenceResponse,
     GitHubPreferenceUpdate,
     GitHubRepoListResponse,
@@ -34,8 +37,15 @@ def discover(
 ) -> GitHubDiscoverResponse:
     languages = payload.languages or settings.github_discovery_languages_list
     topics = payload.topics or get_topics(db)
-    count = discover_candidates(db, languages, topics=topics)
-    return GitHubDiscoverResponse(discovered=count)
+    state = run_github_exploration(db, force=True, languages=languages, topics=topics)
+    if state.status == "failed":
+        raise HTTPException(status_code=503, detail=state.error_message)
+    return GitHubDiscoverResponse(discovered=state.discovered_count)
+
+
+@router.get("/exploration", response_model=GitHubExplorationResponse)
+def exploration_status(db: DbSession, _user: CurrentUser) -> GitHubExplorationResponse:
+    return GitHubExplorationResponse.model_validate(get_exploration_state(db))
 
 
 @router.get("/preferences", response_model=GitHubPreferenceResponse)
@@ -64,7 +74,7 @@ def list_repos(
     offset: int = Query(default=0, ge=0),
     limit: int = Query(default=50, ge=1, le=200),
 ) -> GitHubRepoListResponse:
-    stmt = select(GitHubRepo)
+    stmt = select(GitHubRepo).where(unreported_repo(), GitHubRepo.archived.is_(False))
     if status_filter:
         stmt = stmt.where(GitHubRepo.status == status_filter)
     else:
@@ -114,13 +124,16 @@ def list_reports(
     )
 
 
-@router.post("/reports/generate", response_model=GitHubReportResponse)
+@router.post("/reports/generate", response_model=GitHubReportResponse | None)
 def generate_report(
     db: DbSession,
     _user: MaintainerUser,
-) -> GitHubReportResponse:
+) -> GitHubReportResponse | None:
     report = generate_daily_report(db)
-    return GitHubReportResponse.model_validate(report)
+    state = get_exploration_state(db)
+    if report is None and state.status == "failed":
+        raise HTTPException(status_code=503, detail=state.error_message)
+    return GitHubReportResponse.model_validate(report) if report else None
 
 
 @router.get("/reports/{report_id}", response_model=GitHubReportResponse)

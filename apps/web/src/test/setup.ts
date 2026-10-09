@@ -1,9 +1,13 @@
 import '@testing-library/jest-dom/vitest'
 import { afterEach } from 'vitest'
-import { cleanup } from '@testing-library/react'
+import { act, cleanup } from '@testing-library/react'
+import { Modal } from 'antd'
 
-afterEach(() => {
-  cleanup()
+afterEach(async () => {
+  await act(async () => {
+    Modal.destroyAll()
+    cleanup()
+  })
   localStorage.clear()
 })
 

@@ -12,7 +12,7 @@ from app.github_service import (
     set_repo_status,
     set_topics,
 )
-from app.models import GitHubRepo
+from app.models import GitHubExplorationState, GitHubRepo
 
 
 def _search_payload():
@@ -40,7 +40,7 @@ def _search_payload():
 
 def test_discover_candidates_upserts(db_session):
     now = datetime(2026, 1, 10, tzinfo=UTC)
-    with patch("app.github_service.search_repositories", return_value=_search_payload()):
+    with patch("app.github_search.search_repositories", return_value=_search_payload()):
         count = discover_candidates(db_session, ["python"], now=now)
 
     assert count == 1
@@ -60,7 +60,7 @@ def test_discover_candidates_captures_languages(db_session):
     payload["items"][0]["language"] = "Go"
     payload["items"][0]["topics"] = ["security"]
 
-    with patch("app.github_service.search_repositories", return_value=payload):
+    with patch("app.github_search.search_repositories", return_value=payload):
         discover_candidates(db_session, ["go", "rust"], now=now)
 
     repo = db_session.scalar(select(GitHubRepo).where(GitHubRepo.full_name == "acme/auth-tool"))
@@ -155,7 +155,7 @@ def test_generate_daily_report_analyzes_when_missing(db_session):
     assert repo.testing_value_score == 70
 
 
-def test_generate_daily_report_only_watched(db_session):
+def test_generate_daily_report_includes_candidates_without_manual_follow(db_session):
     now = datetime(2026, 1, 10, tzinfo=UTC)
     r1 = GitHubRepo(
         full_name="a/one",
@@ -181,16 +181,21 @@ def test_generate_daily_report_only_watched(db_session):
     db_session.add_all([r1, r2, r3])
     db_session.commit()
 
-    report = generate_daily_report(db_session, now=now)
+    with patch(
+        "app.github_service.analyze_repo_intel",
+        return_value=RepoIntel("摘要", "测试价值", ["回归"], ["试点"], 85, []),
+    ):
+        report = generate_daily_report(db_session, now=now)
 
     assert report.report_type == "daily"
-    assert len(report.items) == 2
-    assert report.items[0].repo_id == r1.id
-    assert report.items[1].repo_id == r2.id
+    assert len(report.items) == 3
+    assert report.items[0].repo_id == r3.id
+    assert report.items[1].repo_id == r1.id
+    assert report.items[2].repo_id == r2.id
     assert report.body_markdown is not None
     assert "a/one" in report.body_markdown
     assert "b/two" in report.body_markdown
-    assert "c/three" not in report.body_markdown
+    assert "c/three" in report.body_markdown
 
 
 def test_discovery_due_no_repos(db_session):
@@ -201,6 +206,9 @@ def test_discovery_due_no_repos(db_session):
 def test_discovery_due_recent(db_session):
     now = datetime(2026, 1, 10, tzinfo=UTC)
     db_session.add(GitHubRepo(full_name="a/b", html_url="https://github.com/a/b", last_seen_at=now))
+    db_session.add(
+        GitHubExplorationState(id=1, status="completed", next_run_at=now + timedelta(hours=24))
+    )
     db_session.commit()
     assert discovery_due(db_session, now=now) is False
 
@@ -218,16 +226,16 @@ def test_discovery_due_stale(db_session):
 def test_discover_candidates_queries_by_topics_when_present(db_session):
     now = datetime(2026, 1, 10, tzinfo=UTC)
     with patch(
-        "app.github_service.search_repositories", return_value=_search_payload()
+        "app.github_search.search_repositories", return_value=_search_payload()
     ) as mock_search:
         count = discover_candidates(db_session, [], topics=["ai"], now=now)
 
-    assert count == 2
+    assert count == 1
     queries = [call.args[0] for call in mock_search.call_args_list]
-    assert queries == [
-        "topic:ai stars:>=20",
-        "ai in:name,description,topics stars:>=20",
-    ]
+    assert len(queries) == 4
+    assert all("ai" in query for query in queries)
+    assert any("created:" in query for query in queries)
+    assert any("pushed:" in query for query in queries)
 
 
 def test_get_topics_empty_by_default(db_session):

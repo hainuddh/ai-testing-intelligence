@@ -10,7 +10,7 @@ from app.cache import delete_prefix_sync
 from app.config import settings
 from app.database import engine
 from app.fetcher import fetch_endpoint
-from app.github_service import discover_candidates, discovery_due
+from app.github_service import run_github_exploration
 from app.models import FetchRun, SourceEndpoint
 
 logging.basicConfig(level=logging.INFO, format="%(asctime)s %(levelname)s %(message)s")
@@ -64,14 +64,12 @@ def run_analysis() -> None:
 
 
 def run_github_discovery() -> None:
-    """定时触发 GitHub 自动发现（无 token 时受 Search API 配额约束）。"""
+    """Run discovery, analysis and publication when the persistent schedule is due."""
     try:
         with Session(engine) as db:
-            if not discovery_due(db):
-                return
-            count = discover_candidates(db, settings.github_discovery_languages_list)
-            if count:
-                logger.info("GitHub discovery discovered=%s", count)
+            state = run_github_exploration(db)
+            if state.status == "failed":
+                logger.warning("GitHub exploration will retry at %s", state.next_run_at)
     except Exception:
         logger.exception("GitHub discovery failed")
 
