@@ -13,6 +13,7 @@ import {
   GlobalOutlined,
   InboxOutlined,
   LogoutOutlined,
+  MoreOutlined,
   PlusOutlined,
   RadarChartOutlined,
   StarFilled,
@@ -20,6 +21,7 @@ import {
   SyncOutlined,
   TeamOutlined,
   UnorderedListOutlined,
+  UndoOutlined,
 } from '@ant-design/icons'
 import {
   Alert,
@@ -27,6 +29,7 @@ import {
   Checkbox,
   Divider,
   Drawer,
+  Dropdown,
   Form,
   Input,
   List,
@@ -1340,14 +1343,120 @@ function GitHubView({ repos, total, reports, loading, exploration, canManage, st
   </div>
 }
 
+type GitHubTopicDraft = { id: number; original: string | null; value: string; removed: boolean }
+
 function GitHubTopicsDrawer({ open, topics, saving, onClose, onSave }: { open: boolean; topics: string[]; saving: boolean; onClose: () => void; onSave: (topics: string[]) => void }) {
-  const [draft, setDraft] = useState<string[]>(topics)
-  useEffect(() => { if (open) setDraft(topics) }, [open, topics])
-  return <Drawer title={<><span className="drawer-kicker">GITHUB FOCUS</span><strong>关注主题</strong></>} open={open} onClose={onClose} destroyOnHidden>
+  const [draft, setDraft] = useState<GitHubTopicDraft[]>([])
+  const [input, setInput] = useState('')
+  const [editingId, setEditingId] = useState<number | null>(null)
+  const [editValue, setEditValue] = useState('')
+  const [issue, setIssue] = useState('')
+  const nextId = useRef(0)
+  useEffect(() => {
+    if (open) {
+      setDraft(topics.map((topic, id) => ({ id, original: topic, value: topic, removed: false })))
+      nextId.current = topics.length
+      setInput('')
+      setEditingId(null)
+      setEditValue('')
+      setIssue('')
+    }
+  }, [open, topics])
+
+  const active = draft.filter((topic) => !topic.removed)
+  const added = active.filter((topic) => topic.original === null).length
+  const modified = active.filter((topic) => topic.original !== null && topic.original !== topic.value).length
+  const removed = draft.filter((topic) => topic.removed && topic.original !== null).length
+  const hasChanges = added + modified + removed > 0
+
+  const updateTopic = (id: number, change: Partial<Pick<GitHubTopicDraft, 'value' | 'removed'>>) => {
+    setDraft((rows) => rows.map((row) => row.id === id ? { ...row, ...change } : row))
+    setIssue('')
+  }
+  const addTopic = () => {
+    if (saving || editingId !== null) return
+    const value = input.trim()
+    if (!value) return
+    const existing = draft.find((topic) => topic.value === value)
+    if (existing && !existing.removed) {
+      setIssue('该主题已存在，请使用其他主题。')
+      return
+    }
+    if (existing) updateTopic(existing.id, { removed: false })
+    else {
+      const id = nextId.current++
+      setDraft((rows) => [...rows, { id, original: null, value, removed: false }])
+    }
+    setInput('')
+    setIssue('')
+  }
+  const confirmEdit = () => {
+    const value = editValue.trim()
+    if (!value) {
+      setIssue('主题不能为空，请填写主题后确认修改。')
+      return
+    }
+    if (draft.some((topic) => topic.id !== editingId && topic.value === value)) {
+      setIssue('该主题已存在，请使用其他主题。')
+      return
+    }
+    if (editingId !== null) updateTopic(editingId, { value })
+    setEditingId(null)
+  }
+
+  return <Drawer title={<><span className="drawer-kicker">GITHUB FOCUS</span><strong id="github-topics-title">关注主题</strong></>}
+    aria-labelledby="github-topics-title" size={520} open={open} onClose={() => { if (!saving) onClose() }}
+    closable={!saving} mask={{ closable: !saving }} keyboard={!saving} destroyOnHidden
+    footer={<div className="github-topics-footer">
+      <div role="status" aria-live="polite" className="github-topics-changes">新增 {added} · 修改 {modified} · 移除 {removed}</div>
+      <p>{editingId !== null ? '请先确认修改或取消编辑。' : input.trim() ? '请先点击添加主题，或清空输入后保存。' : hasChanges ? '保存后生效，可在保存前撤销移除。' : '尚无更改。'}</p>
+      <div className="github-topics-footer-actions">
+        <Button aria-label="取消" disabled={saving} onClick={onClose}>取消</Button>
+        <Button type="primary" loading={saving} disabled={!hasChanges || editingId !== null || Boolean(input.trim())}
+          onClick={() => onSave(active.map((topic) => topic.value))}>保存关注主题</Button>
+      </div>
+    </div>}>
     <p className="drawer-copy">设置你关心的方向，平台将在下一轮探索时按这些主题寻找并研究新项目。已进入历史报告的项目不会再次推荐。</p>
-    <Space direction="vertical" style={{ width: '100%' }} size={16}>
-      <Select mode="tags" value={draft} onChange={setDraft} style={{ width: '100%' }} placeholder="输入主题后回车，如 testing、rag" tokenSeparators={[',']} open={false} suffixIcon={null} aria-label="关注主题" />
-      <Button type="primary" size="large" block loading={saving} onClick={() => onSave(draft.map((t) => t.trim()).filter(Boolean))}>保存关注主题</Button>
-    </Space>
+    <div className="github-topics-add">
+      <label htmlFor="github-topic-input">新增关注主题</label>
+      <div className="github-topics-add-controls">
+        <Input id="github-topic-input" placeholder="如 testing、AI testing、rag" value={input} disabled={saving || editingId !== null}
+          onChange={(event) => { setInput(event.target.value); setIssue('') }}
+          onPressEnter={(event) => { if (!event.nativeEvent.isComposing) { event.preventDefault(); addTopic() } }} />
+        <Button icon={<PlusOutlined />} disabled={saving || editingId !== null || !input.trim()} onClick={addTopic}>添加主题</Button>
+      </div>
+      <p>每次添加一个主题，支持空格；也可以按回车确认添加。</p>
+    </div>
+    {issue && <Alert type="error" showIcon title={issue} className="github-topics-error" />}
+    <div className="github-topics-heading"><strong>关注方向</strong><span>{active.length} 个主题</span></div>
+    {!draft.length && <p className="github-topics-empty">尚未添加关注主题，平台将按默认语言范围探索项目。</p>}
+    <ul className="github-topics-list" aria-label="关注主题列表">
+      {draft.map((topic) => <li key={topic.id} className={`github-topic-row${topic.removed ? ' is-removed' : ''}`}>
+        {editingId === topic.id ? <div className="github-topic-edit">
+          <Input aria-label="编辑关注主题" autoFocus value={editValue} disabled={saving}
+            onChange={(event) => { setEditValue(event.target.value); setIssue('') }}
+            onPressEnter={(event) => { if (!event.nativeEvent.isComposing) { event.preventDefault(); confirmEdit() } }} />
+          <div className="github-topic-edit-actions">
+            <Button disabled={saving} onClick={() => { setEditingId(null); setIssue('') }}>取消编辑</Button>
+            <Button type="primary" disabled={saving} onClick={confirmEdit}>确认修改</Button>
+          </div>
+        </div> : <>
+          <div className="github-topic-label"><strong>{topic.value}</strong>
+            <span>{topic.removed ? '待移除' : topic.original === null ? '新增待保存' : topic.original !== topic.value ? '修改待保存' : '已保存'}</span>
+          </div>
+          {topic.removed ? <Button icon={<UndoOutlined />} disabled={saving || editingId !== null}
+            aria-label={`撤销移除 ${topic.value}`} onClick={() => updateTopic(topic.id, { removed: false })}>撤销</Button>
+            : <div className="github-topic-actions">
+              <Button type="text" icon={<EditOutlined />} aria-label={`编辑主题 ${topic.value}`} disabled={saving || editingId !== null}
+                onClick={() => { setEditingId(topic.id); setEditValue(topic.value); setIssue('') }}>编辑</Button>
+              <Dropdown trigger={['click']} disabled={saving || editingId !== null} destroyOnHidden
+                menu={{ items: [{ key: 'remove', label: '移除主题', icon: <DeleteOutlined />, danger: true }], onClick: () => updateTopic(topic.id, { removed: true }) }}>
+                <Button type="text" icon={<MoreOutlined />} aria-label={`更多操作 ${topic.value}`} disabled={saving || editingId !== null} />
+              </Dropdown>
+            </div>}
+        </>}
+      </li>)}
+    </ul>
+    {draft.length > 0 && active.length === 0 && <p className="github-topics-empty">保存后将按默认语言范围探索项目。你可以撤销移除，继续保留关注方向。</p>}
   </Drawer>
 }

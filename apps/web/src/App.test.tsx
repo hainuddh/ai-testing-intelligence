@@ -33,15 +33,24 @@ const githubReport = {
   status: 'ready', generated_at: '2026-10-09T00:00:00Z', items: [],
 }
 
-function mockGithubPage({ status = exploration, reports = [githubReport], role = 'maintainer' } = {}) {
-  return vi.spyOn(globalThis, 'fetch').mockImplementation(async (input) => {
+function mockGithubPage({ status = exploration, reports = [githubReport], role = 'maintainer', topics = ['testing'] } = {}) {
+  return vi.spyOn(globalThis, 'fetch').mockImplementation(async (input, init) => {
     const path = String(input)
     if (path === '/api/v1/auth/me') return json({ id: 'user-2', username: 'reader', role })
     if (path === '/api/v1/github/exploration') return json(status)
     if (path === '/api/v1/github/reports') return json({ items: reports, total: reports.length })
-    if (path === '/api/v1/github/preferences') return json({ topics: ['testing'] })
+    if (path === '/api/v1/github/preferences') return json(init?.method === 'PUT' ? JSON.parse(String(init.body)) : { topics })
     return json({ items: [], total: 0 })
   })
+}
+
+async function openGithubTopicsEditor() {
+  render(<App />)
+  await screen.findByRole('heading', { name: '内容情报' })
+  await userEvent.click(screen.getByRole('button', { name: 'GitHub 追踪' }))
+  await screen.findByText('关注方向')
+  await userEvent.click(screen.getByRole('button', { name: /关注主题/ }))
+  return within(await screen.findByRole('dialog', { name: /关注主题/ }))
 }
 
 describe('management radar workflow', () => {
@@ -379,9 +388,13 @@ describe('management radar workflow', () => {
     await screen.findByRole('heading', { name: '内容情报' })
     await user.click(screen.getByRole('button', { name: 'GitHub 追踪' }))
     await user.click(await screen.findByRole('button', { name: 'edit 关注主题' }))
+    await user.type(screen.getByRole('textbox', { name: '新增关注主题' }), 'testing')
+    await user.click(screen.getByRole('button', { name: /添加主题/ }))
     await user.click(screen.getByRole('button', { name: '保存关注主题' }))
     expect((await screen.findByText('提交的数据不符合要求，请检查填写内容后重试。')).closest('.ant-notification-notice')).not.toBeNull()
     expect(screen.queryByText('[object Object]')).not.toBeInTheDocument()
+    expect(screen.getByRole('list', { name: '关注主题列表' })).toHaveTextContent('testing')
+    expect(screen.getByText('新增 1 · 修改 0 · 移除 0')).toBeInTheDocument()
   })
 
   it('submits WeChat content without fetching the platform page', async () => {
@@ -702,7 +715,7 @@ describe('management radar workflow', () => {
     expect(clickSpy.mock.instances[0]).toHaveAttribute('download', 'github-report-3.md')
     await waitFor(() => expect(revokeObjectURL).toHaveBeenCalledWith('blob:github-report'))
   })
-  it.each(['', '{Enter}'])('saves AI testing as a GitHub topic with JSON headers (suffix %j)', async (suffix) => {
+  it.each(['button', 'enter'])('saves AI testing as a GitHub topic with JSON headers (%s)', async (method) => {
     localStorage.setItem('access_token', 'existing-token')
     const user = userEvent.setup()
     const fetchMock = vi.spyOn(globalThis, 'fetch')
@@ -718,7 +731,10 @@ describe('management radar workflow', () => {
     await screen.findByRole('heading', { name: '内容情报' })
     await user.click(screen.getByRole('button', { name: 'GitHub 追踪' }))
     await user.click(await screen.findByRole('button', { name: /关注主题/ }))
-    await user.type(screen.getByRole('combobox', { name: '关注主题' }), `AI testing${suffix}`)
+    await user.type(screen.getByRole('textbox', { name: '新增关注主题' }), ' AI testing ')
+    if (method === 'enter') await user.keyboard('{Enter}')
+    else await user.click(screen.getByRole('button', { name: /添加主题/ }))
+    expect(screen.getByText('新增 1 · 修改 0 · 移除 0')).toBeInTheDocument()
     await user.click(await screen.findByRole('button', { name: '保存关注主题' }))
 
     await waitFor(() => expect(fetchMock).toHaveBeenCalledWith('/api/v1/github/preferences', expect.objectContaining({
@@ -727,6 +743,118 @@ describe('management radar workflow', () => {
       body: JSON.stringify({ topics: ['AI testing'] }),
     })))
     await waitFor(() => expect(screen.queryByRole('button', { name: '保存关注主题' })).not.toBeInTheDocument())
+  })
+
+  it('keeps saved GitHub topics when backspace clears the separate add input', async () => {
+    localStorage.setItem('access_token', 'existing-token')
+    const user = userEvent.setup()
+    const fetchMock = mockGithubPage({ topics: ['testing', 'rag'] })
+    const editor = await openGithubTopicsEditor()
+    const input = editor.getByRole('textbox', { name: '新增关注主题' })
+    await user.type(input, 'draft')
+    await user.clear(input)
+    await user.keyboard('{Backspace}')
+    const list = within(editor.getByRole('list', { name: '关注主题列表' }))
+    expect(list.getAllByRole('listitem')).toHaveLength(2)
+    expect(list.getByText('testing')).toBeInTheDocument()
+    expect(list.getByText('rag')).toBeInTheDocument()
+    expect(editor.queryByRole('button', { name: /移除/ })).not.toBeInTheDocument()
+    expect(editor.getByText('新增 0 · 修改 0 · 移除 0')).toBeInTheDocument()
+    expect(editor.getByRole('button', { name: '保存关注主题' })).toBeDisabled()
+    expect(fetchMock.mock.calls.filter(([, init]) => init?.method === 'PUT')).toHaveLength(0)
+  })
+
+  it('stages GitHub topic removal with undo and persists it only after saving', async () => {
+    localStorage.setItem('access_token', 'existing-token')
+    const user = userEvent.setup()
+    const fetchMock = mockGithubPage({ topics: ['testing', 'rag'] })
+    const editor = await openGithubTopicsEditor()
+    const removeTesting = async () => {
+      await user.click(editor.getByRole('button', { name: '更多操作 testing' }))
+      await user.click(await screen.findByRole('menuitem', { name: /移除主题/ }))
+    }
+    await removeTesting()
+    expect(editor.getByText('待移除')).toBeInTheDocument()
+    expect(editor.getByText('新增 0 · 修改 0 · 移除 1')).toBeInTheDocument()
+    expect(fetchMock.mock.calls.filter(([, init]) => init?.method === 'PUT')).toHaveLength(0)
+    expect(screen.getByText('testing', { selector: '.github-focus .ant-tag' })).toBeInTheDocument()
+    await user.click(editor.getByRole('button', { name: '撤销移除 testing' }))
+    expect(editor.queryByText('待移除')).not.toBeInTheDocument()
+    expect(editor.getByRole('button', { name: '保存关注主题' })).toBeDisabled()
+    await removeTesting()
+    await user.click(editor.getByRole('button', { name: '保存关注主题' }))
+    await waitFor(() => expect(fetchMock).toHaveBeenCalledWith('/api/v1/github/preferences', expect.objectContaining({
+      method: 'PUT', body: JSON.stringify({ topics: ['rag'] }),
+    })))
+    await waitFor(() => expect(screen.queryByRole('dialog', { name: /关注主题/ })).not.toBeInTheDocument())
+    expect(screen.queryByText('testing', { selector: '.github-focus .ant-tag' })).not.toBeInTheDocument()
+  })
+
+  it('reviews additions, edits and removals before saving the final GitHub topics', async () => {
+    localStorage.setItem('access_token', 'existing-token')
+    const user = userEvent.setup()
+    const fetchMock = mockGithubPage({ topics: ['testing', 'playwright'] })
+    const editor = await openGithubTopicsEditor()
+    await user.click(editor.getByRole('button', { name: '编辑主题 testing' }))
+    expect(editor.getByRole('button', { name: '保存关注主题' })).toBeDisabled()
+    const editInput = editor.getByRole('textbox', { name: '编辑关注主题' })
+    await user.clear(editInput)
+    await user.type(editInput, ' AI testing ')
+    await user.click(editor.getByRole('button', { name: '确认修改' }))
+    await user.type(editor.getByRole('textbox', { name: '新增关注主题' }), 'rag')
+    expect(editor.getByRole('button', { name: '保存关注主题' })).toBeDisabled()
+    await user.click(editor.getByRole('button', { name: /添加主题/ }))
+    await user.click(editor.getByRole('button', { name: '更多操作 playwright' }))
+    await user.click(await screen.findByRole('menuitem', { name: /移除主题/ }))
+    expect(editor.getByText('新增 1 · 修改 1 · 移除 1')).toBeInTheDocument()
+    await user.click(editor.getByRole('button', { name: '保存关注主题' }))
+    await waitFor(() => expect(fetchMock).toHaveBeenCalledWith('/api/v1/github/preferences', expect.objectContaining({
+      method: 'PUT', body: JSON.stringify({ topics: ['AI testing', 'rag'] }),
+    })))
+  })
+
+  it('validates duplicate and empty GitHub topic edits without losing saved topics', async () => {
+    localStorage.setItem('access_token', 'existing-token')
+    const user = userEvent.setup()
+    mockGithubPage({ topics: ['testing', 'rag'] })
+    const editor = await openGithubTopicsEditor()
+    const addInput = editor.getByRole('textbox', { name: '新增关注主题' })
+    await user.type(addInput, ' testing ')
+    await user.click(editor.getByRole('button', { name: /添加主题/ }))
+    expect(editor.getByRole('alert')).toHaveTextContent('该主题已存在')
+    await user.clear(addInput)
+    await user.click(editor.getByRole('button', { name: '编辑主题 testing' }))
+    const editInput = editor.getByRole('textbox', { name: '编辑关注主题' })
+    await user.clear(editInput)
+    await user.click(editor.getByRole('button', { name: '确认修改' }))
+    expect(editor.getByRole('alert')).toHaveTextContent('主题不能为空')
+    await user.type(editInput, ' rag ')
+    await user.click(editor.getByRole('button', { name: '确认修改' }))
+    expect(editor.getByRole('alert')).toHaveTextContent('该主题已存在')
+    await user.click(editor.getByRole('button', { name: '取消编辑' }))
+    expect(editor.getByText('新增 0 · 修改 0 · 移除 0')).toBeInTheDocument()
+    expect(editor.getByRole('list', { name: '关注主题列表' })).toHaveTextContent('testing')
+    expect(editor.getByRole('button', { name: '保存关注主题' })).toBeDisabled()
+  })
+
+  it('discards unsaved GitHub topic changes when the editor is cancelled', async () => {
+    localStorage.setItem('access_token', 'existing-token')
+    const user = userEvent.setup()
+    const fetchMock = mockGithubPage({ topics: ['testing'] })
+    const editor = await openGithubTopicsEditor()
+    await user.type(editor.getByRole('textbox', { name: '新增关注主题' }), 'rag')
+    await user.click(editor.getByRole('button', { name: /添加主题/ }))
+    await user.click(editor.getByRole('button', { name: '更多操作 testing' }))
+    await user.click(await screen.findByRole('menuitem', { name: /移除主题/ }))
+    await user.click(editor.getByRole('button', { name: '取消' }))
+    await waitFor(() => expect(screen.queryByRole('dialog', { name: /关注主题/ })).not.toBeInTheDocument())
+    await user.click(screen.getByRole('button', { name: /关注主题/ }))
+    const reopened = within(await screen.findByRole('dialog', { name: /关注主题/ }))
+    expect(reopened.getByRole('list', { name: '关注主题列表' })).toHaveTextContent('testing')
+    expect(reopened.queryByText('rag')).not.toBeInTheDocument()
+    expect(reopened.queryByText('待移除')).not.toBeInTheDocument()
+    expect(reopened.getByRole('button', { name: '保存关注主题' })).toBeDisabled()
+    expect(fetchMock.mock.calls.filter(([, init]) => init?.method === 'PUT')).toHaveLength(0)
   })
 
   it('renders report markdown with clickable repository link', async () => {

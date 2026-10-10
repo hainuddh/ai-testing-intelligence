@@ -92,6 +92,31 @@ button, input, textarea { font: inherit; }
 .github-toolbar { margin-bottom: 16px; }
 .github-research-empty { padding: 48px 20px; border: 1px dashed #36584e; border-radius: 8px; text-align: center; color: var(--text-secondary); }
 .github-research-empty .anticon { font-size: 36px; color: #8effb8; }
+.github-topics-add { margin-bottom: 24px; }
+.github-topics-add label, .github-topics-heading strong { color: #dff8e8; font-size: 14px; font-weight: 600; }
+.github-topics-add-controls { display: flex; align-items: center; gap: 8px; margin-top: 10px; }
+.github-topics-add-controls .ant-input { min-width: 0; }
+.github-topics-add-controls .ant-btn { flex-shrink: 0; }
+.github-topics-add p, .github-topics-footer p { margin: 8px 0 0; color: var(--text-muted); font-size: 12px; line-height: 1.6; }
+.github-topics-error { margin-bottom: 20px; }
+.github-topics-heading { display: flex; align-items: center; justify-content: space-between; gap: 12px; margin-bottom: 12px; }
+.github-topics-heading > span { color: var(--text-muted); font-size: 12px; }
+.github-topics-list { display: grid; gap: 10px; margin: 0; padding: 0; list-style: none; }
+.github-topic-row { display: flex; align-items: center; justify-content: space-between; gap: 12px; padding: 14px 12px 14px 16px; border: 1px solid #29463d; border-radius: 6px; background: #0d211b; }
+.github-topic-label { display: flex; flex: 1; min-width: 0; flex-direction: column; gap: 4px; }
+.github-topic-label strong { font-size: 14px; font-weight: 600; line-height: 1.6; overflow-wrap: anywhere; }
+.github-topic-label span { color: var(--text-muted); font-size: 12px; }
+.github-topic-row.is-removed { border-style: dashed; border-color: #6c5b33; background: rgba(108,91,51,.1); }
+.github-topic-row.is-removed .github-topic-label strong { color: var(--text-muted); text-decoration: line-through; }
+.github-topic-row.is-removed .github-topic-label span { color: #ffd978; }
+.github-topic-actions, .github-topic-edit-actions { display: flex; gap: 4px; flex-shrink: 0; }
+.github-topic-edit { display: grid; gap: 12px; width: 100%; min-width: 0; }
+.github-topic-edit-actions { justify-content: flex-end; gap: 8px; }
+.github-topics-empty { margin: 12px 0; padding: 16px; border: 1px dashed #315247; border-radius: 6px; color: var(--text-muted); font-size: 13px; line-height: 1.7; }
+.github-topics-footer { padding: 8px 0; }
+.github-topics-changes { color: #dff8e8; font-size: 13px; font-variant-numeric: tabular-nums; }
+.github-topics-footer-actions { display: flex; gap: 10px; margin-top: 16px; }
+.github-topics-footer-actions .ant-btn-primary { flex: 1; }
 @media (max-width: 650px) { .github-report-heading { flex-direction: column; }.github-exploration [role="status"] { align-items: flex-start; flex-direction: column; } }
 @media (max-width: 1180px) and (min-width: 651px) {
   .collection-tools { grid-template-columns: repeat(3, minmax(0, 1fr)); }
