@@ -49,11 +49,12 @@ describe('daily email digest', () => {
 
   it('lets an administrator configure the daily digest and read delivery history', async () => {
     localStorage.setItem('access_token', 'admin-token')
-    const preferences = { enabled: false, recipient: '', value_threshold: 70, send_time: '09:00', smtp_configured: false }
+    const preferences = { enabled: false, value_threshold: 70, send_time: '09:00', smtp_configured: false }
     const fetchMock = vi.spyOn(globalThis, 'fetch').mockImplementation(async (input, init) => {
       const path = String(input)
       if (path === '/api/v1/auth/me') return json({ id: 'admin', username: 'admin', role: 'admin' })
       if (path === '/api/v1/email-digest/preferences') return json(init?.method === 'PUT' ? { ...preferences, ...JSON.parse(String(init.body)) } : preferences)
+      if (path === '/api/v1/email-digest/recipients') return json([{ id: 1, email: 'reader@example.com', name: '测试组', enabled: true, started_at: null, created_at: '2026-10-10T01:00:00Z' }])
       if (path.startsWith('/api/v1/email-digest/deliveries')) return json({ items: [{ id: 1, recipient: 'reader@example.com', business_date: '2026-10-10', status: 'sent', item_count: 3, attempts: 1, created_at: '2026-10-10T01:00:00Z', sent_at: '2026-10-10T01:00:02Z', next_attempt_at: null, error_message: null }], total: 1 })
       return json({ items: [], total: 0 })
     })
@@ -62,14 +63,16 @@ describe('daily email digest', () => {
     await userEvent.click(screen.getByRole('button', { name: '邮件推送' }))
     await screen.findByRole('heading', { name: '每日情报邮件' })
     expect(await screen.findByText(/尚未配置发件服务/)).toBeInTheDocument()
+    expect(screen.getByText(/内容情报和GitHub项目研究日报/)).toBeInTheDocument()
+    expect(screen.getByText(/已发布的GitHub日报按研究结果发送/)).toBeInTheDocument()
+    expect(screen.getByText(/采集、内容分析和GitHub研究完成后/)).toBeInTheDocument()
     expect(screen.getByLabelText('价值分超过')).toHaveValue('70')
     expect(screen.getByLabelText('每日发送时间')).toHaveValue('09:00')
     expect(await screen.findByText('已发送')).toBeInTheDocument()
-    await userEvent.type(screen.getByLabelText('收件邮箱'), 'reader@example.com')
     await userEvent.click(screen.getByRole('switch', { name: '启用每日邮件' }))
     fireEvent.change(screen.getByLabelText('每日发送时间'), { target: { value: '10:30' } })
     await userEvent.click(screen.getByRole('button', { name: '保存邮件设置' }))
-    await waitFor(() => expect(fetchMock).toHaveBeenCalledWith('/api/v1/email-digest/preferences', expect.objectContaining({ method: 'PUT', body: JSON.stringify({ enabled: true, recipient: 'reader@example.com', value_threshold: 70, send_time: '10:30' }) })))
+    await waitFor(() => expect(fetchMock).toHaveBeenCalledWith('/api/v1/email-digest/preferences', expect.objectContaining({ method: 'PUT', body: JSON.stringify({ enabled: true, value_threshold: 70, send_time: '10:30' }) })))
     expect(await screen.findByText('邮件设置已保存')).toBeInTheDocument()
   })
 
@@ -79,6 +82,98 @@ describe('daily email digest', () => {
     render(<App />)
     await screen.findByRole('heading', { name: '内容情报' })
     expect(screen.queryByRole('button', { name: '邮件推送' })).not.toBeInTheDocument()
+  })
+
+  it('manages multiple recipient mailboxes with names, editing, pause and deletion', async () => {
+    localStorage.setItem('access_token', 'admin-token')
+    let recipients = [{ id: 1, email: 'reader@example.com', name: '测试组', enabled: true, started_at: null, created_at: '2026-10-10T01:00:00Z' }]
+    const fetchMock = vi.spyOn(globalThis, 'fetch').mockImplementation(async (input, init) => {
+      const path = String(input)
+      if (path === '/api/v1/auth/me') return json({ id: 'admin', username: 'admin', role: 'admin' })
+      if (path === '/api/v1/email-digest/preferences') return json({ enabled: true, value_threshold: 70, send_time: '09:00', smtp_configured: true })
+      if (path === '/api/v1/email-digest/recipients') {
+        if (init?.method === 'POST') {
+          const added = { ...recipients[0], id: 2, ...JSON.parse(String(init.body)) }
+          recipients = [...recipients, added]
+          return json(added, 201)
+        }
+        return json(recipients)
+      }
+      if (path === '/api/v1/email-digest/recipients/2') {
+        if (init?.method === 'DELETE') { recipients = recipients.filter(row => row.id !== 2); return new Response(null, { status: 204 }) }
+        const changed = { ...recipients[1], ...JSON.parse(String(init?.body)) }
+        recipients = [recipients[0], changed]
+        return json(changed)
+      }
+      return json({ items: [], total: 0 })
+    })
+    render(<App />)
+    await screen.findByRole('heading', { name: '内容情报' })
+    await userEvent.click(screen.getByRole('button', { name: '邮件推送' }))
+    await screen.findByRole('heading', { name: '收件邮箱管理' })
+    expect(await screen.findByText('测试组')).toBeInTheDocument()
+    await userEvent.click(screen.getByRole('button', { name: '新增收件邮箱' }))
+    const dialog = within(await screen.findByRole('dialog', { name: '新增收件邮箱' }))
+    await userEvent.type(dialog.getByLabelText('邮箱地址'), 'second@example.com')
+    await userEvent.type(dialog.getByLabelText('名称或备注'), '研发组')
+    await userEvent.click(dialog.getByRole('button', { name: '保存邮箱' }))
+    expect(await screen.findByText('second@example.com')).toBeInTheDocument()
+    expect(screen.getByText('研发组')).toBeInTheDocument()
+    await userEvent.click(screen.getByRole('button', { name: '编辑second@example.com' }))
+    const editor = within(await screen.findByRole('dialog', { name: '编辑收件邮箱' }))
+    await userEvent.clear(editor.getByLabelText('名称或备注'))
+    await userEvent.type(editor.getByLabelText('名称或备注'), '工程组')
+    await userEvent.click(editor.getByRole('button', { name: '保存邮箱' }))
+    expect(await screen.findByText('工程组')).toBeInTheDocument()
+    await userEvent.click(screen.getByRole('switch', { name: '启用second@example.com' }))
+    await waitFor(() => expect(fetchMock).toHaveBeenCalledWith('/api/v1/email-digest/recipients/2', expect.objectContaining({ method: 'PATCH', body: JSON.stringify({ enabled: false }) })))
+    await userEvent.click(screen.getByRole('button', { name: '删除second@example.com' }))
+    const confirmation = within(await screen.findByRole('dialog', { name: '删除收件邮箱？' }))
+    await userEvent.click(confirmation.getByRole('button', { name: '确认删除' }))
+    await waitFor(() => expect(screen.queryByText('second@example.com')).not.toBeInTheDocument())
+    expect(screen.getByText('reader@example.com')).toBeInTheDocument()
+  }, 30000)
+
+  it('keeps the mailbox editor open for invalid or duplicate addresses', async () => {
+    localStorage.setItem('access_token', 'admin-token')
+    const fetchMock = vi.spyOn(globalThis, 'fetch').mockImplementation(async (input, init) => {
+      const path = String(input)
+      if (path === '/api/v1/auth/me') return json({ id: 'admin', username: 'admin', role: 'admin' })
+      if (path === '/api/v1/email-digest/preferences') return json({ enabled: false, value_threshold: 70, send_time: '09:00', smtp_configured: true })
+      if (path === '/api/v1/email-digest/recipients') return init?.method === 'POST' ? json({ detail: '该收件邮箱已存在' }, 409) : json([])
+      return json({ items: [], total: 0 })
+    })
+    render(<App />)
+    await screen.findByRole('heading', { name: '内容情报' })
+    await userEvent.click(screen.getByRole('button', { name: '邮件推送' }))
+    await userEvent.click(await screen.findByRole('button', { name: '新增收件邮箱' }))
+    const dialog = within(await screen.findByRole('dialog', { name: '新增收件邮箱' }))
+    await userEvent.type(dialog.getByLabelText('邮箱地址'), 'bad')
+    await userEvent.click(dialog.getByRole('button', { name: '保存邮箱' }))
+    expect(await dialog.findByText('请输入有效的邮箱地址')).toBeInTheDocument()
+    expect(fetchMock.mock.calls.filter(([, init]) => init?.method === 'POST')).toHaveLength(0)
+    await userEvent.clear(dialog.getByLabelText('邮箱地址'))
+    await userEvent.type(dialog.getByLabelText('邮箱地址'), 'reader@example.com')
+    await userEvent.click(dialog.getByRole('button', { name: '保存邮箱' }))
+    expect(await dialog.findByText('该收件邮箱已存在')).toBeInTheDocument()
+    expect(screen.getByRole('dialog', { name: '新增收件邮箱' })).toBeInTheDocument()
+  })
+
+  it('disables retries for paused or deleted recipients', async () => {
+    localStorage.setItem('access_token', 'admin-token')
+    vi.spyOn(globalThis, 'fetch').mockImplementation(async (input) => {
+      const path = String(input)
+      if (path === '/api/v1/auth/me') return json({ id: 'admin', username: 'admin', role: 'admin' })
+      if (path === '/api/v1/email-digest/preferences') return json({ enabled: true, value_threshold: 70, send_time: '09:00', smtp_configured: true })
+      if (path === '/api/v1/email-digest/recipients') return json([{ id: 1, email: 'paused@example.com', name: '', enabled: false, started_at: null, created_at: '2026-10-10T01:00:00Z' }])
+      return json({ items: ['paused@example.com', 'deleted@example.com'].map((recipient, index) => ({ id: index + 1, recipient, business_date: '2026-10-10', status: 'failed', item_count: 1, attempts: 3, created_at: '2026-10-10T01:00:00Z', sent_at: null, next_attempt_at: null, error_message: null })), total: 2 })
+    })
+    render(<App />)
+    await screen.findByRole('heading', { name: '内容情报' })
+    await userEvent.click(screen.getByRole('button', { name: '邮件推送' }))
+    await screen.findByRole('heading', { name: '收件邮箱管理' })
+    expect(screen.getAllByRole('button', { name: '重试' })).toHaveLength(2)
+    screen.getAllByRole('button', { name: '重试' }).forEach(button => expect(button).toBeDisabled())
   })
 })
 

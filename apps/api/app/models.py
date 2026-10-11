@@ -42,10 +42,19 @@ class EmailDigestPreference(Base):
 
     id: Mapped[int] = mapped_column(primary_key=True)
     enabled: Mapped[bool] = mapped_column(Boolean, default=False)
-    recipient: Mapped[str] = mapped_column(String(254), default="")
     value_threshold: Mapped[int] = mapped_column(Integer, default=70)
     send_time: Mapped[str] = mapped_column(String(5), default="09:00")
+
+
+class EmailDigestRecipient(Base):
+    __tablename__ = "email_digest_recipients"
+
+    id: Mapped[int] = mapped_column(primary_key=True)
+    email: Mapped[str] = mapped_column(String(254), unique=True)
+    name: Mapped[str] = mapped_column(String(100), default="")
+    enabled: Mapped[bool] = mapped_column(Boolean, default=True)
     started_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utc_now)
     lease_token: Mapped[str | None] = mapped_column(String(36), nullable=True)
     lease_until: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
 
@@ -73,6 +82,9 @@ class EmailDigestDelivery(Base):
     items: Mapped[list["EmailDigestItem"]] = relationship(
         cascade="all, delete-orphan", order_by="EmailDigestItem.rank"
     )
+    github_items: Mapped[list["EmailDigestGitHubItem"]] = relationship(
+        cascade="all, delete-orphan", order_by="EmailDigestGitHubItem.rank"
+    )
 
 
 class EmailDigestItem(Base):
@@ -86,6 +98,20 @@ class EmailDigestItem(Base):
     # Keep receipts even when collected content is deleted and imported again.
     content_id: Mapped[int] = mapped_column(Integer)
     content_hash: Mapped[str] = mapped_column(String(64), index=True)
+    rank: Mapped[int] = mapped_column(Integer)
+
+
+class EmailDigestGitHubItem(Base):
+    __tablename__ = "email_digest_github_items"
+    __table_args__ = (UniqueConstraint("delivery_id", "repo_key"),)
+
+    id: Mapped[int] = mapped_column(primary_key=True)
+    delivery_id: Mapped[int] = mapped_column(
+        ForeignKey("email_digest_deliveries.id", ondelete="CASCADE"), index=True
+    )
+    # Research may be removed later; keep the receipt and frozen delivery body.
+    report_id: Mapped[int] = mapped_column(Integer)
+    repo_key: Mapped[str] = mapped_column(String(255), index=True)
     rank: Mapped[int] = mapped_column(Integer)
 
 

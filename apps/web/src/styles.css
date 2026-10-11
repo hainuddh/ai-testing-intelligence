@@ -9,6 +9,9 @@
 .email-rules h2 { margin: 0 0 12px; font-size: 18px; }.email-rules p { margin: 0 0 24px; color: var(--text-secondary); line-height: 1.8; }.email-rules p:last-child { margin-bottom: 0; }
 .email-history-heading { display: flex; align-items: center; justify-content: space-between; gap: 16px; margin-bottom: 16px; }
 .email-history small { display: block; max-width: 260px; color: var(--text-secondary); white-space: normal; }
+.email-recipients { margin-bottom: 32px; }
+.email-recipients .email-history-heading h2 { margin-bottom: 8px; }
+.email-recipients .email-history-heading p { margin: 0; color: var(--text-secondary); }
 @media (max-width: 760px) { .email-settings-grid { grid-template-columns: 1fr; }.email-settings-panel { padding: 20px; } }
 body { margin: 0; min-width: 320px; min-height: 100vh; background: #07110f; }
 button, input, textarea { font: inherit; }
