@@ -4,19 +4,22 @@ import logging
 import re
 import smtplib
 import ssl
-from datetime import UTC, datetime, timedelta, timezone
+from datetime import UTC, date, datetime, timedelta
 from email.message import EmailMessage
 from email.utils import format_datetime
 from html import escape
+from types import SimpleNamespace
 from uuid import uuid4
 
-from sqlalchemy import func, or_, select, update
+from sqlalchemy import and_, func, or_, select, update
 from sqlalchemy.exc import IntegrityError
 from sqlalchemy.orm import Session, defer, selectinload
 
 from app.config import settings
+from app.digest_schedule import SHANGHAI, DigestSchedule, digest_schedule, schedule_for_day
 from app.models import (
     ContentItem,
+    DigestBatch,
     EmailDigestDelivery,
     EmailDigestGitHubItem,
     EmailDigestItem,
@@ -31,7 +34,6 @@ from app.models import (
 )
 from app.reporting import inline_text, render_markdown_report, safe_url
 
-SHANGHAI = timezone(timedelta(hours=8))
 LEASE_DURATION = timedelta(minutes=10)
 MAX_ATTEMPTS = 3
 MAX_ITEMS = 100
@@ -120,6 +122,18 @@ def update_preferences(
         for recipient in recipients:
             if recipient.started_at is None:
                 recipient.started_at = utc(now or datetime.now(UTC))
+    if preference.send_time != send_time:
+        # A prepared snapshot remains immutable; a changed clock time applies before
+        # the first attempt. SMTP retries and manual retries retain their own schedule.
+        for delivery in db.scalars(select(EmailDigestDelivery).where(
+            EmailDigestDelivery.status == "pending",
+            EmailDigestDelivery.attempts == 0,
+            EmailDigestDelivery.attempted_at.is_(None),
+            EmailDigestDelivery.batch_id.is_(None),
+        )):
+            delivery.next_attempt_at = schedule_for_day(
+                send_time, date.fromisoformat(delivery.business_date)
+            ).send_at
     preference.enabled = enabled
     preference.value_threshold = value_threshold
     preference.send_time = send_time
@@ -185,12 +199,22 @@ def digest_day_start(now: datetime) -> datetime:
     )
 
 
-def needs_daily_preparation(db: Session, now: datetime) -> bool:
+def configured_digest_schedule(db: Session, now: datetime) -> DigestSchedule | None:
     preference = db.get(EmailDigestPreference, 1)
     if not preference or not preference.enabled:
+        return None
+    if db.scalar(
+        select(EmailDigestRecipient.id).where(EmailDigestRecipient.enabled.is_(True)).limit(1)
+    ) is None:
+        return None
+    return digest_schedule(preference.send_time, now)
+
+
+def needs_daily_preparation(db: Session, now: datetime) -> bool:
+    schedule = configured_digest_schedule(db, now)
+    if schedule is None:
         return False
-    local = utc(now).astimezone(SHANGHAI)
-    if local.strftime("%H:%M") < preference.send_time:
+    if utc(now) < schedule.prepare_at:
         return False
     finished = (
         select(EmailDigestDelivery.id)
@@ -198,8 +222,8 @@ def needs_daily_preparation(db: Session, now: datetime) -> bool:
             func.lower(EmailDigestDelivery.recipient) == EmailDigestRecipient.email,
             EmailDigestDelivery.status != "skipped",
             or_(
-                EmailDigestDelivery.business_date == local.strftime("%Y-%m-%d"),
-                EmailDigestDelivery.sent_at >= digest_day_start(now),
+                EmailDigestDelivery.business_date == str(schedule.business_date),
+                EmailDigestDelivery.sent_at >= digest_day_start(schedule.send_at),
             ),
         )
         .exists()
@@ -216,7 +240,9 @@ def needs_daily_preparation(db: Session, now: datetime) -> bool:
 
 def github_research_pending(db: Session, now: datetime) -> bool:
     state = db.get(GitHubExplorationState, 1, populate_existing=True)
-    start = digest_day_start(now)
+    preference = db.get(EmailDigestPreference, 1)
+    schedule = digest_schedule(preference.send_time if preference else "09:00", now)
+    start = schedule.prepare_at
     if (
         state is None
         or state.status != "completed"
@@ -231,13 +257,22 @@ def github_research_pending(db: Session, now: datetime) -> bool:
             report is None
             or report.status != "ready"
             or report.report_type != "daily"
-            or not start <= utc(report.generated_at) <= utc(now)
+            or (
+                report.report_key is not None
+                and report.report_key != f"daily:{schedule.business_date}"
+            )
+            or utc(report.generated_at) > utc(now)
+            or (
+                report.report_key is None
+                and utc(report.generated_at) < min(start, digest_day_start(schedule.send_at))
+            )
         )
     return False  # A completed discovery with no new eligible projects is genuinely empty.
 
 
 def digest_preparation_pending(db: Session, now: datetime) -> str | None:
-    start = digest_day_start(now)
+    preference = db.get(EmailDigestPreference, 1)
+    start = digest_schedule(preference.send_time if preference else "09:00", now).prepare_at
     latest_run = (
         select(FetchRun.id)
         .where(FetchRun.endpoint_id == SourceEndpoint.id)
@@ -259,19 +294,20 @@ def digest_preparation_pending(db: Session, now: datetime) -> str | None:
         or not start <= utc(started) <= utc(completed) <= utc(now)
         for status, started, completed in runs
     ):
-        return "当天信源采集尚未全部成功完成"
+        return "本次邮件准备窗口内的信源采集尚未全部成功完成"
     if (
         db.scalar(select(ContentItem.id).where(ContentItem.analysis_status != "analyzed").limit(1))
         is not None
     ):
         return "内容分析尚未全部完成，等待分析或失败重试"
     if github_research_pending(db, now):
-        return "当天GitHub项目研究尚未完成，等待研究或失败重试"
+        return "本次邮件的GitHub项目研究尚未完成，等待研究或失败重试"
     return None
 
 
 def digest_content(
-    db: Session, preference: EmailDigestPreference, recipient: EmailDigestRecipient, now: datetime
+    db: Session, preference: EmailDigestPreference, recipient: EmailDigestRecipient, now: datetime,
+    *, content_ids: list[int] | None = None,
 ) -> list[ContentItem]:
     reserved = (
         select(EmailDigestItem.id)
@@ -296,6 +332,7 @@ def digest_content(
                 ContentItem.testing_value_score > preference.value_threshold,
                 ContentItem.analyzed_at >= recipient.started_at,
                 ContentItem.analyzed_at <= now,
+                ContentItem.id.in_(content_ids) if content_ids is not None else True,
                 ~reserved,
             )
             .order_by(
@@ -307,7 +344,8 @@ def digest_content(
 
 
 def digest_github_research(
-    db: Session, recipient: EmailDigestRecipient, now: datetime
+    db: Session, recipient: EmailDigestRecipient, now: datetime,
+    *, report_ids: list[int] | None = None,
 ) -> list[tuple[int, GitHubRepo]]:
     reserved = (
         select(EmailDigestGitHubItem.id)
@@ -327,6 +365,7 @@ def digest_github_research(
             GitHubReport.status == "ready",
             GitHubReport.generated_at >= recipient.started_at,
             GitHubReport.generated_at <= now,
+            GitHubReport.id.in_(report_ids) if report_ids is not None else True,
             ~reserved,
         )
         .order_by(
@@ -408,7 +447,7 @@ def build_message(delivery: EmailDigestDelivery) -> EmailMessage:
     message["From"] = sender
     message["To"] = normalize_mailbox(delivery.recipient)
     message["Subject"] = delivery.subject
-    message["Date"] = format_datetime(utc(delivery.created_at))
+    message["Date"] = format_datetime(utc(delivery.attempted_at or delivery.created_at))
     message["Message-ID"] = (
         f"<signal-atlas-digest-{delivery.id}-{delivery.business_date}@{sender.split('@')[1]}>"
     )
@@ -460,14 +499,20 @@ def send_digest(delivery: EmailDigestDelivery) -> None:
             raise
 
 
-def deliver(db: Session, delivery: EmailDigestDelivery, now: datetime) -> EmailDigestDelivery:
+def deliver(
+    db: Session, delivery: EmailDigestDelivery, now: datetime, *, actual_clock: bool = False,
+) -> EmailDigestDelivery:
     delivery.status = "sending"
     delivery.attempted_at = now
     delivery.attempts += 1
     delivery.next_attempt_at = None
+    snapshot = SimpleNamespace(**{field: getattr(delivery, field) for field in (
+        "id", "recipient", "business_date", "subject", "body_text", "body_html",
+        "body_markdown", "created_at", "attempted_at",
+    )})
     db.commit()  # Persist the attempt before any network I/O.
     try:
-        send_digest(delivery)
+        send_digest(snapshot)  # No ORM access or checked-out connection during SMTP.
     except DeliveryUncertain:
         delivery.status = "uncertain"
         delivery.error_message = "无法确认邮件是否已接收，请核对收件箱后决定是否重试。"
@@ -478,7 +523,7 @@ def deliver(db: Session, delivery: EmailDigestDelivery, now: datetime) -> EmailD
             delivery.next_attempt_at = now + timedelta(minutes=5 * 3 ** (delivery.attempts - 1))
     else:
         delivery.status = "sent"
-        delivery.sent_at = now
+        delivery.sent_at = datetime.now(UTC) if actual_clock else now
         delivery.error_message = None
     db.commit()
     return delivery
@@ -489,8 +534,10 @@ def run_claimed_digest(
     preference: EmailDigestPreference,
     recipient: EmailDigestRecipient,
     now: datetime,
+    *, batch: DigestBatch | None = None, delivery_only: bool = False,
+    actual_clock: bool = False,
 ) -> EmailDigestDelivery | None:
-    interrupted = db.scalar(
+    interrupted = None if batch else db.scalar(
         select(EmailDigestDelivery)
         .where(
             func.lower(EmailDigestDelivery.recipient) == recipient.email,
@@ -504,46 +551,56 @@ def run_claimed_digest(
         interrupted.error_message = "发送过程被中断，请核对收件箱后决定是否重试。"
         db.commit()
         return interrupted
-    retry = db.scalar(
+    retry = None if batch else db.scalar(
         select(EmailDigestDelivery)
         .where(
             func.lower(EmailDigestDelivery.recipient) == recipient.email,
             EmailDigestDelivery.status.in_(["pending", "failed"]),
             EmailDigestDelivery.attempts < MAX_ATTEMPTS,
             or_(
-                EmailDigestDelivery.next_attempt_at <= now, EmailDigestDelivery.status == "pending"
+                EmailDigestDelivery.next_attempt_at <= now,
+                and_(
+                    EmailDigestDelivery.status == "pending",
+                    EmailDigestDelivery.next_attempt_at.is_(None),
+                ),
             ),
         )
         .order_by(EmailDigestDelivery.id)
     )
     if retry:
-        return deliver(db, retry, now)
-    local = now.astimezone(SHANGHAI)
-    day_start = digest_day_start(now)
-    if local.strftime("%H:%M") < preference.send_time:
+        return deliver(db, retry, now, actual_clock=actual_clock)
+    if delivery_only:
         return None
-    today = local.strftime("%Y-%m-%d")
+    schedule = digest_schedule(preference.send_time, now)
+    day_start = digest_day_start(schedule.send_at)
+    if batch is None and now < schedule.prepare_at:
+        return None
+    today = batch.business_date if batch else str(schedule.business_date)
     existing = db.scalar(
         select(EmailDigestDelivery).where(
             func.lower(EmailDigestDelivery.recipient) == recipient.email,
             or_(
                 EmailDigestDelivery.business_date == today, EmailDigestDelivery.sent_at >= day_start
-            ),
+            ) if batch is None else EmailDigestDelivery.business_date == today,
         )
     )
-    if existing and existing.status != "skipped":
+    if existing and (batch is not None or existing.status != "skipped"):
         return None
-    reason = digest_preparation_pending(db, now)
+    reason = None if batch else digest_preparation_pending(db, now)
     if reason:
         logger.info("Email digest waiting for preparation: %s", reason)
         return None
-    items = digest_content(db, preference, recipient, now)
-    research = digest_github_research(db, recipient, now)
+    items = digest_content(db, preference, recipient, now,
+                           content_ids=batch.candidate_content_ids if batch else None)
+    research = digest_github_research(db, recipient, now,
+                                    report_ids=batch.report_ids if batch else None)
     # Keep both categories represented when a backlog reaches the per-mail limit.
     research = research[: MAX_ITEMS // 2 if items else MAX_ITEMS]
     items = items[: MAX_ITEMS - len(research)]
     repos = [repo for _, repo in research]
     item_count = len(items) + len(repos)
+    if not item_count and batch is None and now < schedule.send_at:
+        return None  # Late results may still arrive during the preparation window.
     if not item_count and existing:
         return None
     body_text, body_html = render_summary(items, today, repos)
@@ -553,6 +610,7 @@ def run_claimed_digest(
 
         markdown += "\n\n" + render_daily_markdown(f"GitHub项目研究日报 · {today}", repos)
     delivery = existing or EmailDigestDelivery(recipient=recipient.email, business_date=today)
+    delivery.batch_id = batch.id if batch else None
     delivery.status = "pending" if item_count else "skipped"
     delivery.created_at = now
     delivery.subject = f"每日高价值测试情报 · {today} · {item_count}条"
@@ -560,6 +618,8 @@ def run_claimed_digest(
     delivery.body_html = body_html if item_count else ""
     delivery.body_markdown = markdown if item_count else ""
     delivery.item_count = item_count
+    delivery.next_attempt_at = (utc(batch.send_at) if batch else schedule.send_at
+                                ) if item_count else None
     delivery.items = [
         EmailDigestItem(content_id=obj.id, content_hash=obj.url_hash, rank=i)
         for i, obj in enumerate(items, start=1)
@@ -574,11 +634,14 @@ def run_claimed_digest(
     except IntegrityError:
         db.rollback()
         return None
-    return deliver(db, delivery, now) if item_count else delivery
+    if batch is not None:
+        return delivery
+    return deliver(db, delivery, now) if item_count and now >= schedule.send_at else delivery
 
 
 def run_recipient_digest(
-    db: Session, recipient_id: int, now: datetime
+    db: Session, recipient_id: int, now: datetime, *, batch: DigestBatch | None = None,
+    delivery_only: bool = False, actual_clock: bool = False,
 ) -> EmailDigestDelivery | None:
     token = str(uuid4())
     claimed = db.execute(
@@ -606,7 +669,8 @@ def run_recipient_digest(
         if recipient.started_at is None:
             recipient.started_at = now
             db.commit()
-        return run_claimed_digest(db, preference, recipient, now)
+        return run_claimed_digest(db, preference, recipient, now, batch=batch,
+                                  delivery_only=delivery_only, actual_clock=actual_clock)
     finally:
         db.rollback()
         db.execute(
@@ -618,6 +682,15 @@ def run_recipient_digest(
             .values(lease_token=None, lease_until=None)
         )
         db.commit()
+
+
+def send_queued_digest(
+    db: Session, recipient_id: int, *, now: datetime | None = None,
+) -> EmailDigestDelivery | None:
+    if not smtp_configured():
+        return None
+    return run_recipient_digest(db, recipient_id, utc(now or datetime.now(UTC)),
+                                delivery_only=True, actual_clock=now is None)
 
 
 def run_daily_digest(db: Session, *, now: datetime | None = None) -> list[EmailDigestDelivery]:

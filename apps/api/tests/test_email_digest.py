@@ -296,7 +296,7 @@ def test_smtp_starttls_auth_and_envelope(db_session, subscription, monkeypatch):
     assert transport.send_message.call_args.kwargs["to_addrs"] == ["reader@example.com"]
 
 
-def test_worker_invokes_email_digest_after_analysis(db_session):
+def test_collection_worker_leaves_delivery_to_the_independent_scheduler(db_session):
     from app import worker
 
     with (
@@ -307,7 +307,7 @@ def test_worker_invokes_email_digest_after_analysis(db_session):
     ):
         worker.run_once()
     analysis.assert_called_once()
-    digest.assert_called_once()
+    digest.assert_not_called()
 
 
 def test_concurrent_worker_cannot_send_while_lease_is_held(db_session, subscription):

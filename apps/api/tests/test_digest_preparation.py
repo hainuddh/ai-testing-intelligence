@@ -1,8 +1,10 @@
-from datetime import UTC, datetime, timedelta
+from datetime import UTC, date, datetime, timedelta
+from threading import Event
 from unittest.mock import MagicMock, patch
 
 import pytest
 from sqlalchemy import select
+from sqlalchemy.orm import Session
 
 from app import email_digest as service
 from app import github_service, worker
@@ -315,7 +317,7 @@ def test_long_source_interval_does_not_skip_daily_preparation(db_session, prepar
         assert [obj.id for obj in worker.due_endpoints(db_session)] == [feed.id]
 
 
-def test_worker_runs_github_before_mail(db_session):
+def test_collection_worker_leaves_research_and_mail_to_independent_schedulers(db_session):
     calls = []
     with (
         patch.object(worker, "engine", db_session.get_bind()),
@@ -324,10 +326,10 @@ def test_worker_runs_github_before_mail(db_session):
         patch.object(worker, "run_email_digest", side_effect=lambda: calls.append("mail")),
     ):
         worker.run_once()
-    assert calls == ["analysis", "github", "mail"]
+    assert calls == ["analysis"]
 
 
-def test_postgres_worker_holds_collection_lock_until_mail_is_prepared():
+def test_postgres_collection_lock_does_not_cover_research_or_delivery():
     calls = []
     engine = MagicMock()
     engine.dialect.name = "postgresql"
@@ -343,7 +345,7 @@ def test_postgres_worker_holds_collection_lock_until_mail_is_prepared():
         patch.object(worker, "run_email_digest", side_effect=lambda: calls.append("mail")),
     ):
         worker.run_once()
-    assert calls == ["lock", "analysis", "github", "mail", "unlock"]
+    assert calls == ["lock", "unlock", "analysis"]
 
 
 def test_github_24_hour_schedule_cannot_leave_today_unprepared(db_session, prepared):
@@ -400,3 +402,273 @@ def test_worker_records_actual_github_finish_time(db_session, prepared):
         worker.run_github_discovery()
     db_session.expire_all()
     assert service.utc(db_session.get(GitHubExplorationState, 1).finished_at) == finished
+
+
+def test_preparation_starts_two_hours_before_configured_send_time(db_session, prepared):
+    assert not service.needs_daily_preparation(db_session, NOW - timedelta(hours=2, seconds=1))
+    assert service.needs_daily_preparation(db_session, NOW - timedelta(hours=2))
+    service.update_preferences(
+        db_session, enabled=True, value_threshold=70, send_time="10:30", now=DAY_START
+    )
+    assert not service.needs_daily_preparation(db_session, NOW - timedelta(minutes=31))
+    assert service.needs_daily_preparation(db_session, NOW - timedelta(minutes=30))
+
+
+def test_collection_is_forced_at_preparation_time_even_if_regular_interval_is_not_due(
+    db_session, prepared
+):
+    source, _ = prepared
+    feed = endpoint(db_session, source)
+    instant = NOW - timedelta(hours=3)  # Today's 06:00 is too early for the 07:00 run.
+    db_session.add(FetchRun(
+        endpoint_id=feed.id, status="succeeded", started_at=instant, completed_at=instant
+    ))
+    db_session.commit()
+    with patch.object(worker, "datetime") as clock:
+        clock.now.return_value = NOW - timedelta(hours=2)
+        assert [obj.id for obj in worker.due_endpoints(db_session)] == [feed.id]
+
+
+def test_ready_mail_is_frozen_early_and_sent_at_the_configured_time(db_session, prepared):
+    source, state = prepared
+    instant = NOW - timedelta(hours=1)
+    state.started_at = instant - timedelta(minutes=10)
+    state.finished_at = instant
+    article = content(db_session, source, analyzed_at=instant)
+    db_session.commit()
+    with patch.object(service, "send_digest") as send:
+        ready = service.run_daily_digest(db_session, now=instant)[0]
+        assert ready.status == "pending" and ready.attempts == 0
+        assert service.utc(ready.next_attempt_at) == NOW
+        assert service.run_daily_digest(db_session, now=NOW - timedelta(seconds=1)) == []
+        send.assert_not_called()
+        # Later research and new backlog must not postpone the already prepared mail.
+        state.status = "running"
+        article.analysis_summary = "New summary"
+        content(db_session, source, url="https://example.com/later", analysis_status="pending")
+        sent = service.run_daily_digest(db_session, now=NOW)[0]
+    assert sent.id == ready.id and sent.status == "sent"
+    assert "New summary" not in sent.body_text
+    send.assert_called_once()
+
+
+def test_empty_preparation_is_not_recorded_as_empty_before_send_time(db_session, prepared):
+    _, state = prepared
+    instant = NOW - timedelta(hours=1)
+    state.started_at = instant - timedelta(minutes=10)
+    state.finished_at = instant
+    db_session.commit()
+    assert service.run_daily_digest(db_session, now=instant) == []
+    assert db_session.scalar(select(EmailDigestDelivery)) is None
+    assert service.run_daily_digest(db_session, now=NOW)[0].status == "skipped"
+
+
+@pytest.mark.parametrize("send_time", ["00:00", "01:00", "01:59"])
+def test_cross_midnight_preparation_belongs_to_the_following_mail_day(
+    db_session, prepared, send_time
+):
+    source, state = prepared
+    service.update_preferences(
+        db_session, enabled=True, value_threshold=70, send_time=send_time, now=DAY_START
+    )
+    hour, minute = map(int, send_time.split(":"))
+    send_at = DAY_START + timedelta(days=1, hours=hour, minutes=minute)
+    prepare_at = send_at - timedelta(hours=2)
+    state.started_at = prepare_at
+    state.finished_at = prepare_at + timedelta(minutes=5)
+    db_session.commit()
+    feed = endpoint(db_session, source)
+    db_session.add(FetchRun(
+        endpoint_id=feed.id, status="succeeded", started_at=prepare_at,
+        completed_at=state.finished_at,
+    ))
+    article = content(db_session, source, analyzed_at=state.finished_at)
+    db_session.commit()
+    with patch.object(service, "send_digest") as send:
+        ready = service.run_daily_digest(db_session, now=state.finished_at)[0]
+        assert ready.business_date == "2026-10-12" and ready.status == "pending"
+        send.assert_not_called()
+        assert service.run_daily_digest(db_session, now=send_at - timedelta(seconds=1)) == []
+        sent = service.run_daily_digest(db_session, now=send_at)[0]
+    assert sent.status == "sent" and sent.items[0].content_id == article.id
+    send.assert_called_once()
+
+
+def test_github_next_run_is_fixed_to_the_next_preparation_time(db_session, prepared):
+    with patch.object(github_service, "discover_candidates", return_value=0):
+        state = github_service.run_github_exploration(db_session, now=NOW, force=True)
+    assert service.utc(state.next_run_at) == NOW + timedelta(days=1, hours=-2)
+
+
+def test_github_cross_midnight_report_uses_the_email_business_date(db_session, prepared):
+    service.update_preferences(
+        db_session, enabled=True, value_threshold=70, send_time="01:00", now=DAY_START
+    )
+    db_session.add(GitHubRepo(
+        full_name="testing/overnight", html_url="https://github.com/testing/overnight",
+        intel_status="analyzed", intel_summary="Overnight research", testing_value_score=80,
+    ))
+    db_session.commit()
+    prepare_at = DAY_START + timedelta(hours=23)
+    with (
+        patch.object(worker, "engine", db_session.get_bind()),
+        patch.object(worker, "datetime") as clock,
+        patch.object(github_service, "datetime") as research_clock,
+        patch.object(github_service, "discover_candidates", return_value=0),
+    ):
+        clock.now.return_value = prepare_at
+        research_clock.now.return_value = prepare_at
+        research_clock.combine.side_effect = datetime.combine
+        research_clock.min = datetime.min
+        worker.run_github_discovery()
+    db_session.expire_all()
+    state = db_session.get(GitHubExplorationState, 1)
+    report = db_session.get(GitHubReport, state.report_id)
+    assert report.report_key == f"daily:{date(2026, 10, 12)}"
+    assert service.utc(report.generated_at) == prepare_at
+    assert service.utc(state.next_run_at) == prepare_at + timedelta(days=1)
+    assert not service.github_research_pending(db_session, prepare_at + timedelta(hours=2))
+
+
+def test_batch_coordinator_keeps_checking_during_slow_collection(monkeypatch):
+    started, researching, finished = Event(), Event(), Event()
+    observed = []
+
+    def slow_collection():
+        started.set()
+        assert finished.wait(timeout=5)
+
+    def mail_check():
+        assert started.wait(timeout=1)
+        assert researching.wait(timeout=1)
+        observed.append(finished.is_set())
+
+    def slow_research():
+        researching.set()
+        assert finished.wait(timeout=5)
+
+    def tick(_seconds):
+        if len(observed) == 2:
+            finished.set()
+            raise KeyboardInterrupt
+
+    monkeypatch.setattr(worker, "run_once", slow_collection)
+    monkeypatch.setattr(worker, "run_github_discovery", slow_research)
+    monkeypatch.setattr(worker, "run_digest_preparation", mail_check)
+    monkeypatch.setattr(worker.time, "sleep", tick)
+    try:
+        with pytest.raises(KeyboardInterrupt):
+            worker.main()
+    finally:
+        finished.set()
+    assert observed == [False, False]
+
+
+def test_changing_send_time_reschedules_an_unattempted_prepared_email(db_session, prepared):
+    source, state = prepared
+    instant = NOW - timedelta(hours=1)
+    state.started_at = instant - timedelta(minutes=10)
+    state.finished_at = instant
+    content(db_session, source, analyzed_at=instant)
+    db_session.commit()
+    with patch.object(service, "send_digest") as send:
+        ready = service.run_daily_digest(db_session, now=instant)[0]
+        service.update_preferences(
+            db_session, enabled=True, value_threshold=70, send_time="10:30", now=instant
+        )
+        assert service.utc(ready.next_attempt_at) == NOW + timedelta(minutes=90)
+        assert service.run_daily_digest(db_session, now=NOW) == []
+        send.assert_not_called()
+        result = service.run_daily_digest(db_session, now=NOW + timedelta(minutes=90))
+        assert result[0].status == "sent"
+
+
+@pytest.mark.parametrize("report_key", [None, "daily:2026-10-11"])
+def test_earlier_published_report_can_be_reused_by_successful_preparation(
+    db_session, prepared, report_key
+):
+    _, state = prepared
+    report, _ = github_report(db_session, state, now=NOW - timedelta(hours=3))
+    report.report_key = report_key
+    db_session.commit()
+    assert not service.github_research_pending(db_session, NOW)
+    with patch.object(service, "send_digest") as send:
+        assert service.run_daily_digest(db_session, now=NOW)[0].status == "sent"
+    send.assert_called_once()
+
+
+def test_first_github_run_waits_for_the_configured_preparation_time(db_session, prepared):
+    _, state = prepared
+    db_session.delete(state)
+    db_session.commit()
+    with (
+        patch.object(worker, "engine", db_session.get_bind()),
+        patch.object(worker, "datetime") as clock,
+        patch.object(github_service, "datetime") as research_clock,
+        patch.object(github_service, "discover_candidates", return_value=0) as discover,
+    ):
+        clock.now.return_value = NOW - timedelta(hours=3)
+        worker.run_github_discovery()
+        discover.assert_not_called()
+        db_session.expire_all()
+        state = db_session.get(GitHubExplorationState, 1)
+        assert service.utc(state.next_run_at) == NOW - timedelta(hours=2)
+        clock.now.return_value = NOW - timedelta(hours=2)
+        research_clock.now.return_value = clock.now.return_value
+        research_clock.combine.side_effect = datetime.combine
+        research_clock.min = datetime.min
+        worker.run_github_discovery()
+    discover.assert_called_once()
+    db_session.expire_all()
+    assert db_session.get(GitHubExplorationState, 1).status == "completed"
+
+
+def test_prepared_email_survives_worker_restart(db_session, prepared):
+    source, state = prepared
+    instant = NOW - timedelta(hours=1)
+    state.started_at = instant - timedelta(minutes=10)
+    state.finished_at = instant
+    content(db_session, source, analyzed_at=instant)
+    db_session.commit()
+    with patch.object(service, "send_digest") as send:
+        ready = service.run_daily_digest(db_session, now=instant)[0]
+        frozen = ready.body_markdown
+        state.status = "running"
+        db_session.commit()
+        with Session(db_session.get_bind()) as restarted:
+            sent = service.run_daily_digest(restarted, now=NOW)[0]
+            assert sent.id == ready.id and sent.status == "sent"
+            assert sent.body_markdown == frozen
+            assert service.run_daily_digest(restarted, now=NOW + timedelta(minutes=1)) == []
+    send.assert_called_once()
+
+
+def test_schedule_alignment_does_not_overwrite_a_concurrent_github_failure(
+    db_session, prepared
+):
+    _, state = prepared
+    align = worker.configured_digest_schedule
+    retry_at = NOW + timedelta(hours=1)
+
+    def concurrent_failure(db, now):
+        with Session(db_session.get_bind()) as concurrent:
+            running = concurrent.get(GitHubExplorationState, 1)
+            running.status = "failed"
+            running.next_run_at = retry_at
+            concurrent.commit()
+        return align(db, now)
+
+    with (
+        patch.object(worker, "engine", db_session.get_bind()),
+        patch.object(worker, "datetime") as clock,
+        patch.object(worker, "configured_digest_schedule", side_effect=concurrent_failure),
+        patch.object(github_service, "datetime") as research_clock,
+        patch.object(github_service, "discover_candidates", return_value=0) as discover,
+    ):
+        clock.now.return_value = research_clock.now.return_value = NOW
+        research_clock.combine.side_effect = datetime.combine
+        research_clock.min = datetime.min
+        worker.run_github_discovery()
+    discover.assert_not_called()
+    db_session.expire_all()
+    assert service.utc(state.next_run_at) == retry_at

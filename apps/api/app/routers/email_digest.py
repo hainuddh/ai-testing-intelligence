@@ -5,6 +5,7 @@ from pydantic import BaseModel, ConfigDict, Field, field_validator, model_valida
 from sqlalchemy import func, select
 
 from app.dependencies import AdminUser, DbSession
+from app.digest_batches import batch_progress
 from app.email_digest import (
     RecipientConflict,
     delete_recipient,
@@ -15,7 +16,7 @@ from app.email_digest import (
     smtp_configured,
     update_preferences,
 )
-from app.models import EmailDigestDelivery, EmailDigestRecipient
+from app.models import DigestBatch, EmailDigestDelivery, EmailDigestRecipient
 
 router = APIRouter(prefix="/email-digest", tags=["email-digest"])
 
@@ -124,6 +125,12 @@ def save_preferences(
 @router.get("/recipients", response_model=list[RecipientResponse])
 def list_recipients(db: DbSession, _user: AdminUser) -> list[EmailDigestRecipient]:
     return list(db.scalars(select(EmailDigestRecipient).order_by(EmailDigestRecipient.id)))
+
+
+@router.get("/batches")
+def list_batches(db: DbSession, _user: AdminUser) -> dict:
+    items = db.scalars(select(DigestBatch).order_by(DigestBatch.business_date.desc()).limit(7))
+    return {"items": [batch_progress(db, batch) for batch in items]}
 
 
 @router.post("/recipients", response_model=RecipientResponse, status_code=201)

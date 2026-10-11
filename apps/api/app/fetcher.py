@@ -15,7 +15,7 @@ from sqlalchemy.orm import Session
 from app.cache import delete_prefix_sync
 from app.config import settings
 from app.content_deduplication import content_url_hash, find_duplicate_content
-from app.models import ContentItem, FetchRun, SourceEndpoint
+from app.models import ContentItem, DigestBatchEndpoint, FetchRun, SourceEndpoint
 
 SUMMARY_ENRICHMENT_LIMIT = 3
 
@@ -476,9 +476,16 @@ def parse_web(data: bytes, url: str) -> list[FetchedItem]:
     return [FetchedItem(title=title[:500], url=url, summary=summary, body=body or None)]
 
 
-def fetch_endpoint(db: Session, endpoint: SourceEndpoint) -> FetchRun:
+def fetch_endpoint(
+    db: Session, endpoint: SourceEndpoint, *, batch_job_id: int | None = None,
+) -> FetchRun:
     run = FetchRun(endpoint_id=endpoint.id, status="running")
     db.add(run)
+    db.flush()
+    if batch_job_id is not None:
+        job = db.get(DigestBatchEndpoint, batch_job_id)
+        job.run_id = run.id
+        job.status = "running"
     db.commit()
     db.refresh(run)
     try:
@@ -500,6 +507,7 @@ def fetch_endpoint(db: Session, endpoint: SourceEndpoint) -> FetchRun:
         created = 0
         updated = False
         enrichment_attempts = 0
+        batch_items = []
         for item in items:
             url_hash = content_url_hash(item.url)
             duplicate_title = item.title if endpoint.endpoint_type == "rss" else None
@@ -532,6 +540,7 @@ def fetch_endpoint(db: Session, endpoint: SourceEndpoint) -> FetchRun:
                     existing.analysis_error = None
                     existing.next_analysis_at = None
                     updated = True
+                    batch_items.append(existing)
                 elif (
                     existing.url_hash == url_hash
                     and existing.source_id == endpoint.source_id
@@ -541,22 +550,24 @@ def fetch_endpoint(db: Session, endpoint: SourceEndpoint) -> FetchRun:
                     existing.summary = item.summary
                     updated = True
                 continue
-            db.add(
-                ContentItem(
-                    source_id=endpoint.source_id,
-                    title=item.title,
-                    url=item.url,
-                    url_hash=url_hash,
-                    summary=item.summary,
-                    body=item.body,
-                    published_at=item.published_at,
-                )
+            new_item = ContentItem(
+                source_id=endpoint.source_id,
+                title=item.title,
+                url=item.url,
+                url_hash=url_hash,
+                summary=item.summary,
+                body=item.body,
+                published_at=item.published_at,
             )
+            db.add(new_item)
+            batch_items.append(new_item)
             created += 1
         endpoint.health_status = "healthy"
         run.status = "succeeded"
         run.items_created = created
         run.completed_at = datetime.now(UTC)
+        db.flush()
+        run.content_ids = sorted({item.id for item in batch_items})
         db.commit()
         if updated:
             delete_prefix_sync("content:list")

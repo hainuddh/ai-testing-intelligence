@@ -315,7 +315,7 @@ def enrich_pending_related_links(db: Session) -> int:
     return len(items)
 
 
-def analyze_pending(db: Session) -> tuple[int, int]:
+def analyze_pending(db: Session, *, priority_ids: list[int] | None = None) -> tuple[int, int]:
     if not settings.analysis_api_base_url or not settings.analysis_model:
         return 0, 0
     items = list(
@@ -332,7 +332,7 @@ def analyze_pending(db: Session) -> tuple[int, int]:
                     ),
                 )
             )
-            .order_by(ContentItem.fetched_at.desc())
+            .order_by(ContentItem.id.in_(priority_ids or []).desc(), ContentItem.fetched_at.desc())
             .limit(settings.analysis_batch_size)
         )
     )

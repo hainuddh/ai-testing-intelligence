@@ -2,7 +2,7 @@
 
 from __future__ import annotations
 
-from datetime import UTC, datetime, timedelta, timezone
+from datetime import UTC, date, datetime, timedelta, timezone
 from uuid import uuid4
 
 import httpx
@@ -227,6 +227,18 @@ def finish_exploration(
     error: str | None = None,
     retry_seconds: int = 3600,
 ) -> None:
+    from app.email_digest import configured_digest_schedule
+
+    next_run_at = now + (
+        timedelta(seconds=retry_seconds) if error else timedelta(hours=24)
+    )
+    with db.no_autoflush:
+        schedule = configured_digest_schedule(db, now)
+    if not error and schedule is not None:
+        next_run_at = (
+            schedule.prepare_at if now < schedule.prepare_at
+            else schedule.prepare_at + timedelta(days=1)
+        )
     # The conditional write locks the lease until publication commits. A stale
     # process must never publish results after a replacement has claimed it.
     with db.no_autoflush:
@@ -239,8 +251,7 @@ def finish_exploration(
             .values(
                 status="failed" if error else "completed",
                 finished_at=now,
-                next_run_at=now
-                + (timedelta(seconds=retry_seconds) if error else timedelta(hours=24)),
+                next_run_at=next_run_at,
                 discovered_count=discovered,
                 error_message=error,
                 lease_token=None,
@@ -261,8 +272,10 @@ def finish_exploration(
     db.expire_all()
 
 
-def _report_for_day(db: Session, now: datetime) -> GitHubReport | None:
-    day = now.astimezone(BUSINESS_TZ).date()
+def _report_for_day(
+    db: Session, now: datetime, *, report_date: date | None = None
+) -> GitHubReport | None:
+    day = report_date or now.astimezone(BUSINESS_TZ).date()
     # Include old reports without report_key to avoid republishing on upgrade day.
     start = datetime.combine(day, datetime.min.time(), tzinfo=BUSINESS_TZ).astimezone(UTC)
     return db.scalar(
@@ -271,7 +284,8 @@ def _report_for_day(db: Session, now: datetime) -> GitHubReport | None:
             GitHubReport.report_type == "daily",
             or_(
                 GitHubReport.report_key == f"daily:{day}",
-                (GitHubReport.generated_at >= start)
+                GitHubReport.report_key.is_(None)
+                & (GitHubReport.generated_at >= start)
                 & (GitHubReport.generated_at < start + timedelta(days=1)),
             ),
         )
@@ -289,10 +303,11 @@ def _build_daily_report(
     db: Session,
     *,
     now: datetime,
+    report_date: date | None = None,
     top_n: int = 5,
     client: httpx.Client | None = None,
 ) -> tuple[GitHubReport | None, bool]:
-    existing = _report_for_day(db, now)
+    existing = _report_for_day(db, now, report_date=report_date)
     if existing:
         return existing, False
     topics = get_topics(db)
@@ -325,7 +340,7 @@ def _build_daily_report(
             break
     if not selected:
         return None, failed
-    day = now.astimezone(BUSINESS_TZ).date()
+    day = report_date or now.astimezone(BUSINESS_TZ).date()
     report = GitHubReport(
         report_key=f"daily:{day}",
         report_type="daily",
@@ -354,6 +369,7 @@ def run_github_exploration(
     db: Session,
     *,
     now: datetime | None = None,
+    report_date: date | None = None,
     force: bool = False,
     discover: bool = True,
     languages: list[str] | None = None,
@@ -389,7 +405,9 @@ def run_github_exploration(
             if not lease.rowcount:
                 raise ExplorationLeaseLost("Search lease was replaced")
             db.commit()
-        report, failed = _build_daily_report(db, now=started, top_n=top_n, client=client)
+        report, failed = _build_daily_report(
+            db, now=started, report_date=report_date, top_n=top_n, client=client
+        )
         finish_exploration(
             db,
             token,

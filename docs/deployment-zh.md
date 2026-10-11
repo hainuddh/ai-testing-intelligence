@@ -13,6 +13,7 @@ Docker Compose 会启动以下服务：
 | `web` | Nginx、前端静态资源和 API 反向代理 | `8080` |
 | `api` | FastAPI 应用（异步读路径 + Redis 缓存） | 无 |
 | `worker` | 定时采集 RSS/Atom 和网页内容，分析后失效缓存 | 无 |
+| `mail-sender` | 独立投递已准备好的每日情报邮件，按邮箱去重和重试 | 无 |
 | `migrate` | 启动前执行一次数据库迁移 | 无 |
 | `postgres` | PostgreSQL 17 和 pgvector | 无 |
 | `redis` | Redis 8，缓存列表查询结果和内容版本 | 无 |
@@ -475,10 +476,10 @@ test -s backups/postgres.dump
 
 ### 12.2 PostgreSQL 恢复
 
-恢复会覆盖目标数据库中的对象和数据。先停止 API 和 Worker，避免恢复期间产生写入：
+恢复会覆盖目标数据库中的对象和数据。先停止API、Worker和独立投递服务，避免恢复期间产生写入和发送邮件：
 
 ```bash
-docker compose stop api worker
+docker compose stop api worker mail-sender
 ```
 
 恢复指定备份：
@@ -490,7 +491,7 @@ docker compose exec -T postgres sh -c 'pg_restore -U "$POSTGRES_USER" -d "$POSTG
 恢复完成后启动 API 并验证：
 
 ```bash
-docker compose start api worker
+docker compose start api worker mail-sender
 curl --fail http://127.0.0.1:8080/api/v1/health
 ```
 

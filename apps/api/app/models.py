@@ -59,6 +59,42 @@ class EmailDigestRecipient(Base):
     lease_until: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
 
 
+class DigestBatch(Base):
+    __tablename__ = "digest_batches"
+
+    id: Mapped[int] = mapped_column(primary_key=True)
+    business_date: Mapped[str] = mapped_column(String(10), unique=True)
+    window_start: Mapped[datetime] = mapped_column(DateTime(timezone=True))
+    prepare_at: Mapped[datetime] = mapped_column(DateTime(timezone=True))
+    cutoff_at: Mapped[datetime] = mapped_column(DateTime(timezone=True))
+    send_at: Mapped[datetime] = mapped_column(DateTime(timezone=True))
+    status: Mapped[str] = mapped_column(String(30), default="preparing", index=True)
+    sealed: Mapped[bool] = mapped_column(Boolean, default=False)
+    required_content_ids: Mapped[list[int]] = mapped_column(JSON, default=list)
+    candidate_content_ids: Mapped[list[int]] = mapped_column(JSON, default=list)
+    report_ids: Mapped[list[int]] = mapped_column(JSON, default=list)
+    github_status: Mapped[str] = mapped_column(String(30), default="pending")
+    github_report_id: Mapped[int | None] = mapped_column(Integer, nullable=True)
+    github_started_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
+    error_message: Mapped[str | None] = mapped_column(Text, nullable=True)
+    completed_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
+    lease_token: Mapped[str | None] = mapped_column(String(36), nullable=True)
+    lease_until: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
+
+
+class DigestBatchEndpoint(Base):
+    __tablename__ = "digest_batch_endpoints"
+    __table_args__ = (UniqueConstraint("batch_id", "endpoint_id"),)
+
+    id: Mapped[int] = mapped_column(primary_key=True)
+    batch_id: Mapped[int] = mapped_column(ForeignKey("digest_batches.id"), index=True)
+    # Keep the batch obligation visible if an administrator removes a source.
+    endpoint_id: Mapped[int] = mapped_column(Integer)
+    run_id: Mapped[int | None] = mapped_column(Integer, nullable=True)
+    status: Mapped[str] = mapped_column(String(30), default="pending")
+    next_attempt_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
+
+
 class EmailDigestDelivery(Base):
     __tablename__ = "email_digest_deliveries"
     __table_args__ = (UniqueConstraint("recipient", "business_date"),)
@@ -66,6 +102,7 @@ class EmailDigestDelivery(Base):
     id: Mapped[int] = mapped_column(primary_key=True)
     recipient: Mapped[str] = mapped_column(String(254), index=True)
     business_date: Mapped[str] = mapped_column(String(10))
+    batch_id: Mapped[int | None] = mapped_column(ForeignKey("digest_batches.id"), nullable=True)
     status: Mapped[str] = mapped_column(String(30), default="pending", index=True)
     subject: Mapped[str] = mapped_column(String(200), default="")
     body_text: Mapped[str] = mapped_column(Text, default="")
@@ -215,6 +252,7 @@ class FetchRun(Base):
     endpoint_id: Mapped[int] = mapped_column(ForeignKey("source_endpoints.id"), index=True)
     status: Mapped[str] = mapped_column(String(30), index=True)
     items_created: Mapped[int] = mapped_column(Integer, default=0)
+    content_ids: Mapped[list[int]] = mapped_column(JSON, default=list)
     error: Mapped[str | None] = mapped_column(Text, nullable=True)
     started_at: Mapped[datetime] = mapped_column(
         DateTime(timezone=True), default=utc_now, index=True

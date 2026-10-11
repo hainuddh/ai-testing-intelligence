@@ -11,6 +11,12 @@ type Delivery = {
   attempts: number; created_at: string; sent_at: string | null;
   next_attempt_at: string | null; error_message: string | null
 }
+type Batch = {
+  id: number; business_date: string; status: string; prepare_at: string; cutoff_at: string;
+  send_at: string; sources_total: number; sources_completed: number;
+  analysis_total: number; analysis_pending: number; github_status: string;
+  error_message: string | null; next_attempt_at: string | null
+}
 const statusLabels: Record<string, string> = {
   sent: '已发送', skipped: '无新内容', pending: '等待发送', sending: '发送中',
   failed: '发送失败', uncertain: '待确认',
@@ -32,6 +38,8 @@ export default function EmailDigestView({ request }: { request: Request }) {
   const [recipientQuery, setRecipientQuery] = useState('')
   const [historyRecipient, setHistoryRecipient] = useState<string | undefined>()
   const [deliveries, setDeliveries] = useState<Delivery[]>([])
+  const [batches, setBatches] = useState<Batch[]>([])
+  const [progressRefresh, setProgressRefresh] = useState(0)
   const [total, setTotal] = useState(0)
   const [page, setPage] = useState(1)
   const [loading, setLoading] = useState(true)
@@ -39,6 +47,15 @@ export default function EmailDigestView({ request }: { request: Request }) {
   const [saving, setSaving] = useState(false)
   const [saved, setSaved] = useState(false)
   const [error, setError] = useState('')
+  const sendTime = Form.useWatch('send_time', form) ?? preferences?.send_time ?? '09:00'
+  const [sendHour, sendMinute] = sendTime.split(':').map(Number)
+  const preparationTime = /^([01]\d|2[0-3]):[0-5]\d$/.test(sendTime)
+    ? `${sendHour < 2 ? '前一天' : '每天'}${String((sendHour + 22) % 24).padStart(2, '0')}:${String(sendMinute).padStart(2, '0')}`
+    : '请选择有效的发送时间'
+  const cutoffMinute = (sendHour * 60 + sendMinute - 10 + 1440) % 1440
+  const cutoffTime = /^([01]\d|2[0-3]):[0-5]\d$/.test(sendTime)
+    ? `${sendHour * 60 + sendMinute < 10 ? '前一天' : '每天'}${String(Math.floor(cutoffMinute / 60)).padStart(2, '0')}:${String(cutoffMinute % 60).padStart(2, '0')}`
+    : '请选择有效的发送时间'
 
   const loadHistory = async (nextPage = page, recipient = historyRecipient) => {
     setHistoryLoading(true)
@@ -71,6 +88,21 @@ export default function EmailDigestView({ request }: { request: Request }) {
     }).finally(() => { if (active) setLoading(false) })
     return () => { active = false }
   }, [])
+
+  useEffect(() => {
+    let active = true
+    const refresh = async () => {
+      try {
+        const data = await request<{ items: Batch[] }>('/api/v1/email-digest/batches')
+        if (active) setBatches(data.items ?? [])
+      } catch (err) {
+        if (active) setError(err instanceof Error ? err.message : '读取准备进度失败')
+      }
+    }
+    void refresh()
+    const timer = setInterval(() => { void refresh() }, 30000)
+    return () => { active = false; clearInterval(timer) }
+  }, [progressRefresh])
 
   useEffect(() => {
     if (editing === undefined) return
@@ -163,12 +195,22 @@ export default function EmailDigestView({ request }: { request: Request }) {
           <Form form={form} layout="vertical" onFinish={save}>
             <Form.Item name="enabled" label="启用每日邮件" valuePropName="checked"><Switch aria-label="启用每日邮件" /></Form.Item>
             <Form.Item name="value_threshold" label="价值分超过" rules={[{ required: true, message: '请填写价值分门槛' }]} extra="用于内容情报，严格超过此分数；默认70分即71分及以上。GitHub日报按研究结果发送。"><InputNumber min={0} max={100} precision={0} /></Form.Item>
-            <Form.Item name="send_time" label="每日发送时间" rules={[{ required: true, message: '请选择发送时间' }]} extra="北京时间；当天采集与研究未完成时会延迟发送。"><Input type="time" /></Form.Item>
+            <Form.Item name="send_time" label="每日发送时间" rules={[{ required: true, message: '请选择发送时间' }]} extra={`准备时间：${preparationTime}；截稿时间：${cutoffTime}（北京时间）。已开始的当天安排保持不变，时间修改从下一批生效。`}><Input type="time" /></Form.Item>
             <Button type="primary" htmlType="submit" loading={saving}>保存邮件设置</Button>
           </Form>
         </section>
-        <aside className="email-settings-panel email-rules"><h2>收到什么</h2><p>内容情报选择主雷达中严格超过配置门槛的新内容，已发布的GitHub日报按研究结果发送。两类内容分别按价值分排序。正文包含评分、摘要和落地建议，完整研究报告随信附上。</p><h2>何时收到</h2><p>到达发送时间后，等待当天采集、内容分析和GitHub研究完成后汇总发送。任一类有新内容就发送，只有内容情报和GitHub日报都为空才跳过；尚未完成或失败时继续等待重试，当天稍后有新结果会再次检查。新邮箱从启用时开始接收，每封合计最多100条，剩余内容留待后续发送。</p><h2>发送记录</h2><p>每个邮箱每天最多投递一封，分别去重和重试，收件人只看到自己的地址。暂停后恢复会保留原来的订阅窗口。待确认的邮件需要核对收件箱，再决定是否重试。</p></aside>
+        <aside className="email-settings-panel email-rules"><h2>收到什么</h2><p>内容情报选择主雷达中严格超过配置门槛的新内容，已发布的GitHub日报按研究结果发送。两类内容分别按价值分排序。正文包含评分、摘要和落地建议，完整研究报告随信附上。</p><h2>何时收到</h2><p>持续采集内容，按发送时间提前2小时补齐当天采集和研究，发送前10分钟截稿。采集、内容分析和GitHub研究完成后保存本次邮件，到配置时间由独立投递服务发送。完整优先：本批任务未完成时延迟发送并继续重试，页面显示进度和原因。任一类有新内容就发送，只有两类都为空才跳过。截稿后新内容留到下一天，本批已开始但晚完成的任务仍计入当天。实际送达时间还受邮件服务影响。新邮箱从启用时开始接收，每封合计最多100条。</p><h2>发送记录</h2><p>每个邮箱每个日报日期最多投递一封，分别去重和重试，收件人只看到自己的地址。暂停后恢复会保留原来的订阅窗口。待确认的邮件需要核对收件箱，再决定是否重试。</p></aside>
       </div>
+      <section className="email-settings-panel" aria-label="每日准备进度">
+        <div className="email-history-heading"><h2>每日准备进度</h2><Button onClick={() => setProgressRefresh(value => value + 1)}>刷新准备进度</Button></div>
+        {batches.length === 0 ? <p>等待下一次准备时间；完整报告准备好后按计划发送。</p> : batches.map(batch => <div key={batch.id}>
+          <Space wrap><strong>{batch.business_date}</strong><Tag color={batch.status === 'delayed' ? 'orange' : batch.status === 'ready' ? 'green' : 'blue'}>{batch.status === 'delayed' ? '延迟准备' : batch.status === 'ready' ? '准备完成' : '准备中'}</Tag>
+            <span>采集{batch.sources_completed}/{batch.sources_total} · 分析{batch.analysis_total - batch.analysis_pending}/{batch.analysis_total} · GitHub研究{batch.github_status === 'completed' ? '已完成' : batch.github_status === 'failed' ? '等待重试' : '准备中'}</span></Space>
+          <p>开始：{timeText(batch.prepare_at)} · 截稿：{timeText(batch.cutoff_at)} · 计划发送：{timeText(batch.send_at)}</p>
+          {batch.error_message && <p>{batch.error_message}</p>}
+          {batch.next_attempt_at && <p>下次重试：{timeText(batch.next_attempt_at)}</p>}
+        </div>)}
+      </section>
       <section className="email-recipients" aria-label="收件邮箱管理">
         <div className="email-history-heading"><div><h2>收件邮箱管理</h2><p>{recipients.length}个邮箱，{recipients.filter(row => row.enabled).length}个已启用</p></div><Space wrap><Input aria-label="搜索收件邮箱" placeholder="搜索邮箱或名称" value={recipientQuery} onChange={event => setRecipientQuery(event.target.value)} allowClear /><Button type="primary" onClick={() => setEditing(null)}>新增收件邮箱</Button></Space></div>
         <Table<Recipient> rowKey="id" dataSource={recipients.filter(row => `${row.email} ${row.name}`.toLowerCase().includes(recipientQuery.trim().toLowerCase()))} scroll={{ x: 700 }} pagination={{ pageSize: 10, showSizeChanger: false }} locale={{ emptyText: '还没有收件邮箱，请先添加' }} columns={[
@@ -192,7 +234,7 @@ export default function EmailDigestView({ request }: { request: Request }) {
           { title: '日报日期', dataIndex: 'business_date' },
           { title: '收件邮箱', dataIndex: 'recipient' },
           { title: '情报数', dataIndex: 'item_count' },
-          { title: '发送状态', key: 'status', render: (_, row) => <Space orientation="vertical"><Tag color={row.status === 'sent' ? 'green' : row.status === 'failed' || row.status === 'uncertain' ? 'orange' : 'default'}>{statusLabels[row.status] || row.status}</Tag>{row.error_message && <small>{row.error_message}</small>}{row.next_attempt_at && <small>下次尝试：{timeText(row.next_attempt_at)}</small>}</Space> },
+          { title: '发送状态', key: 'status', render: (_, row) => <Space orientation="vertical"><Tag color={row.status === 'sent' ? 'green' : row.status === 'failed' || row.status === 'uncertain' ? 'orange' : 'default'}>{statusLabels[row.status] || row.status}</Tag>{row.error_message && <small>{row.error_message}</small>}{row.next_attempt_at && <small>{row.status === 'pending' && row.attempts === 0 ? '计划发送' : '下次尝试'}：{timeText(row.next_attempt_at)}</small>}</Space> },
           { title: '尝试次数', dataIndex: 'attempts' },
           { title: '发送时间（北京）', dataIndex: 'sent_at', render: timeText },
           { title: '操作', key: 'action', render: (_, row) => ['failed', 'uncertain'].includes(row.status) && <Button size="small" aria-label="重试" disabled={!preferences.enabled || !recipients.some(recipient => recipient.enabled && recipient.email === row.recipient.toLowerCase())} onClick={() => Modal.confirm({ title: '重试这封邮件？', content: row.status === 'uncertain' ? '请先核对收件箱。如果已收到，再次投递会产生重复邮件。' : '将按原报告内容重新投递到此收件邮箱。', okText: '确认重试', cancelText: '取消', onOk: () => retry(row) })}>重试</Button> },
