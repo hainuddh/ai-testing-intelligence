@@ -14,7 +14,6 @@ import {
   InboxOutlined,
   LogoutOutlined,
   MailOutlined,
-  MoreOutlined,
   PlusOutlined,
   RadarChartOutlined,
   StarFilled,
@@ -22,7 +21,6 @@ import {
   SyncOutlined,
   TeamOutlined,
   UnorderedListOutlined,
-  UndoOutlined,
 } from '@ant-design/icons'
 import {
   Alert,
@@ -30,7 +28,6 @@ import {
   Checkbox,
   Divider,
   Drawer,
-  Dropdown,
   Form,
   Input,
   List,
@@ -47,7 +44,10 @@ import {
 } from 'antd'
 import type { FormInstance } from 'antd'
 import { userFacingError } from './errors'
+import { TopicChangeSummary, TopicEditor, useTopicDraft } from './TopicEditor'
 import EmailDigestView from './EmailDigestView'
+
+const emptyTopics: readonly string[] = []
 
 type Role = 'viewer' | 'maintainer' | 'admin'
 type User = { id: string; username: string; role: Role; is_active?: boolean }
@@ -61,7 +61,7 @@ type Source = {
   trust_level: number
   topics: string[]
 }
-type SourceForm = Omit<Source, 'id' | 'languages' | 'topics'> & { languages: string[]; topics: string }
+type SourceForm = Omit<Source, 'id'>
 type ContentItem = {
   id: number
   source_id: number
@@ -100,7 +100,7 @@ type Endpoint = {
 type EndpointForm = Omit<Endpoint, 'id' | 'source_id' | 'enabled' | 'health_status'>
 type ManualContentForm = { title: string; url: string; summary: string; published_at?: string }
 type SourceDiscovery = { homepage_url: string; feed_url: string; suggested_name: string; samples: { title: string; url: string; summary: string | null; published_at: string | null }[] }
-type SourceDiscoveryForm = { homepage_url: string; name: string; languages: string[]; trust_level: number; topics: string }
+type SourceDiscoveryForm = { homepage_url: string; name: string; languages: string[]; trust_level: number; topics: string[] }
 type CollectedItem = {
   id: number
   source_id: number
@@ -200,7 +200,6 @@ const languageOptions = [
   { value: 'vi', label: '越南语' },
   { value: 'th', label: '泰语' },
 ]
-const splitValues = (value: string) => value.split(/[,，]/).map((item) => item.trim()).filter(Boolean)
 const list = <T,>(data: T[] | { items: T[] }) => Array.isArray(data) ? data : data.items
 const dateText = (value: string | null) => value ? new Intl.DateTimeFormat('zh-CN', { dateStyle: 'medium' }).format(new Date(value)) : '时间未知'
 const dateTimeText = (value: string | null) => value ? new Intl.DateTimeFormat('zh-CN', { dateStyle: 'medium', timeStyle: 'medium' }).format(new Date(value)) : '时间未知'
@@ -672,7 +671,7 @@ export default function App() {
   const openSource = (source?: Source) => {
     setEditingSource(source ?? null)
     sourceForm.resetFields()
-    sourceForm.setFieldsValue(source ? { ...source, languages: source.languages, topics: source.topics.join(', ') } : { trust_level: 3 })
+    sourceForm.setFieldsValue(source ? { ...source } : { trust_level: 3, topics: [] })
     setSourceDrawer(true)
   }
 
@@ -680,7 +679,7 @@ export default function App() {
     discoveryNotification.destroy('source-discovery-error')
     setDiscovery(null)
     discoveryForm.resetFields()
-    discoveryForm.setFieldsValue({ languages: ['en'], trust_level: 3, topics: '' })
+    discoveryForm.setFieldsValue({ languages: ['en'], trust_level: 3, topics: [] })
     setDiscoveryDrawer(true)
   }
 
@@ -712,7 +711,7 @@ export default function App() {
       await request('/api/v1/sources/discover/install', {
         method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({
           homepage_url: discovery.homepage_url, feed_url: discovery.feed_url, name: values.name,
-          languages: values.languages, trust_level: values.trust_level, topics: splitValues(values.topics),
+          languages: values.languages, trust_level: values.trust_level, topics: values.topics,
         }),
       })
       setDiscoveryDrawer(false)
@@ -728,11 +727,10 @@ export default function App() {
     setSaving(true)
     setError('')
     try {
-      const payload = { ...values, topics: splitValues(values.topics) }
       const path = editingSource ? `/api/v1/sources/${editingSource.id}` : '/api/v1/sources'
       await request<Source>(path, {
         method: editingSource ? 'PATCH' : 'POST',
-        headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(payload),
+        headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(values),
       })
       setSourceDrawer(false)
       await loadSources()
@@ -1029,17 +1027,29 @@ function SourcesView({ sources, total, loading, canManage, canDelete, onAdd, onD
 }
 
 function SourceDiscoveryDrawer({ open, discovery, form, saving, onClose, onDiscover, onInstall }: { open: boolean; discovery: SourceDiscovery | null; form: FormInstance<SourceDiscoveryForm>; saving: boolean; onClose: () => void; onDiscover: () => void; onInstall: (values: SourceDiscoveryForm) => void }) {
-  return <Drawer title={<><span className="drawer-kicker">SOURCE DISCOVERY</span><strong>自动发现信源</strong></>} size="large" open={open} onClose={onClose} destroyOnHidden>
+  const topicEditor = useTopicDraft(emptyTopics, open, saving)
+  return <Drawer title={<><span className="drawer-kicker">SOURCE DISCOVERY</span><strong id="source-discovery-title">自动发现信源</strong></>}
+    aria-labelledby="source-discovery-title" size="large" open={open} onClose={() => { if (!saving) onClose() }}
+    closable={!saving} mask={{ closable: !saving }} keyboard={!saving} destroyOnHidden
+    footer={discovery && <div className="topics-footer">
+      <TopicChangeSummary editor={topicEditor} />
+      <div className="topics-footer-actions">
+        <Button aria-label="取消" disabled={saving} onClick={onClose}>取消</Button>
+        <Button form="source-discovery-form" htmlType="submit" type="primary" loading={saving} disabled={topicEditor.blocked}>确认并启用监听</Button>
+      </div>
+    </div>}>
     <p className="drawer-copy">输入网站主页，平台会在站内发现并验证 RSS / Atom，展示样例后再创建监听。</p>
-    <Form form={form} layout="vertical" requiredMark={false} onFinish={onInstall}>
+    <Form id="source-discovery-form" form={form} layout="vertical" requiredMark={false}
+      onFinish={(values) => { if (!saving && !topicEditor.blocked) onInstall({ ...values, topics: topicEditor.values }) }}>
       <Form.Item label="网站主页" name="homepage_url" rules={[{ required: true, type: 'url', message: '请输入有效主页地址' }]}><Input.Search placeholder="https://example.com/blog/" enterButton="开始探测" loading={saving && !discovery} onSearch={onDiscover} /></Form.Item>
       {discovery && <>
         <div className="discovery-result"><span>已验证订阅地址</span><a href={discovery.feed_url} target="_blank" rel="noreferrer">{discovery.feed_url}</a></div>
         <div className="discovery-samples">{discovery.samples.map((item) => <article key={item.url}><strong>{item.title}</strong><small>{dateText(item.published_at)}</small><p>{item.summary || '该条目未提供摘要'}</p></article>)}</div>
         <Form.Item label="信源名称" name="name" rules={[{ required: true, message: '请输入信源名称' }]}><Input /></Form.Item>
         <div className="form-pair"><Form.Item label="语言" name="languages" rules={[{ required: true, message: '请选择语言' }]}><Select mode="multiple" placeholder="请选择语言" options={languageOptions} optionFilterProp="label" /></Form.Item><Form.Item label="可信等级" name="trust_level" rules={[{ required: true }]}><Select options={Object.entries(trustLabels).map(([value, label]) => ({ value: Number(value), label }))} /></Form.Item></div>
-        <Form.Item label="关注主题" name="topics" extra="多个值用逗号分隔"><Input placeholder="AI Agent, testing" /></Form.Item>
-        <Button htmlType="submit" type="primary" size="large" block loading={saving}>确认并启用监听</Button>
+        <Form.Item label="关注主题">
+          <TopicEditor editor={topicEditor} inputId="discovery-topic-input" emptyText="添加你关心的方向，也可以稍后在信源编辑中补充。" />
+        </Form.Item>
       </>}
     </Form>
   </Drawer>
@@ -1110,16 +1120,29 @@ function DatabaseView({ data, loading }: { data: DatabaseCounts | null; loading:
 }
 
 function SourceDrawer({ open, editing, form, saving, onClose, onSave }: { open: boolean; editing: Source | null; form: FormInstance<SourceForm>; saving: boolean; onClose: () => void; onSave: (values: SourceForm) => void }) {
-  return <Drawer title={<><span className="drawer-kicker">SIGNAL POINT</span><strong>{editing ? '编辑监听' : '建立监听'}</strong></>} size="large" open={open} onClose={onClose} destroyOnHidden>
+  const topicEditor = useTopicDraft(editing?.topics ?? emptyTopics, open, saving)
+  return <Drawer title={<><span className="drawer-kicker">SIGNAL POINT</span><strong id="source-editor-title">{editing ? '编辑监听' : '建立监听'}</strong></>}
+    aria-labelledby="source-editor-title" size="large" open={open} onClose={() => { if (!saving) onClose() }}
+    closable={!saving} mask={{ closable: !saving }} keyboard={!saving} destroyOnHidden
+    footer={<div className="topics-footer">
+      <TopicChangeSummary editor={topicEditor} required />
+      <div className="topics-footer-actions">
+        <Button aria-label="取消" disabled={saving} onClick={onClose}>取消</Button>
+        <Button form="source-editor-form" htmlType="submit" type="primary" loading={saving}
+          disabled={topicEditor.blocked || !topicEditor.values.length}>{editing ? '保存修改' : '建立监听'}</Button>
+      </div>
+    </div>}>
     <p className="drawer-copy">定义信源坐标与可信度，系统将持续从此处捕获技术信号。</p>
-    <Form form={form} layout="vertical" requiredMark={false} onFinish={onSave}>
+    <Form id="source-editor-form" form={form} layout="vertical" requiredMark={false}
+      onFinish={(values) => { if (!saving && !topicEditor.blocked && topicEditor.values.length) onSave({ ...values, topics: topicEditor.values }) }}>
       <Form.Item label="信源名称" name="name" rules={[{ required: true, message: '请输入信源名称' }]}><Input /></Form.Item>
       <div className="form-pair"><Form.Item label="信源类型" name="source_type" rules={[{ required: true, message: '请选择类型' }]}><Select options={Object.entries(typeLabels).map(([value, label]) => ({ value, label }))} /></Form.Item><Form.Item label="可信等级" name="trust_level" rules={[{ required: true, message: '请选择可信度' }]}><Select options={Object.entries(trustLabels).map(([value, label]) => ({ value: Number(value), label }))} /></Form.Item></div>
       <Form.Item label="主页地址" name="homepage_url" rules={[{ type: 'url', message: '请输入有效地址' }]}><Input placeholder="https://" /></Form.Item>
       <Form.Item label="描述" name="description"><Input.TextArea rows={3} /></Form.Item>
       <Form.Item label="语言" name="languages" rules={[{ required: true, message: '请选择语言' }]}><Select mode="multiple" placeholder="请选择语言" options={languageOptions} optionFilterProp="label" /></Form.Item>
-      <Form.Item label="关注主题" name="topics" rules={[{ required: true, message: '请输入主题' }]} extra="多个值用逗号分隔"><Input placeholder="AI Agent, foundation-models" /></Form.Item>
-      <Button htmlType="submit" type="primary" size="large" block loading={saving}>{editing ? '保存修改' : '建立监听'}</Button>
+      <Form.Item label="关注主题">
+        <TopicEditor editor={topicEditor} inputId="source-topic-input" emptyText="添加关注方向，便于管理这个信源的内容主题。" />
+      </Form.Item>
     </Form>
   </Drawer>
 }
@@ -1347,120 +1370,22 @@ function GitHubView({ repos, total, reports, loading, exploration, canManage, st
   </div>
 }
 
-type GitHubTopicDraft = { id: number; original: string | null; value: string; removed: boolean }
-
 function GitHubTopicsDrawer({ open, topics, saving, onClose, onSave }: { open: boolean; topics: string[]; saving: boolean; onClose: () => void; onSave: (topics: string[]) => void }) {
-  const [draft, setDraft] = useState<GitHubTopicDraft[]>([])
-  const [input, setInput] = useState('')
-  const [editingId, setEditingId] = useState<number | null>(null)
-  const [editValue, setEditValue] = useState('')
-  const [issue, setIssue] = useState('')
-  const nextId = useRef(0)
-  useEffect(() => {
-    if (open) {
-      setDraft(topics.map((topic, id) => ({ id, original: topic, value: topic, removed: false })))
-      nextId.current = topics.length
-      setInput('')
-      setEditingId(null)
-      setEditValue('')
-      setIssue('')
-    }
-  }, [open, topics])
-
-  const active = draft.filter((topic) => !topic.removed)
-  const added = active.filter((topic) => topic.original === null).length
-  const modified = active.filter((topic) => topic.original !== null && topic.original !== topic.value).length
-  const removed = draft.filter((topic) => topic.removed && topic.original !== null).length
-  const hasChanges = added + modified + removed > 0
-
-  const updateTopic = (id: number, change: Partial<Pick<GitHubTopicDraft, 'value' | 'removed'>>) => {
-    setDraft((rows) => rows.map((row) => row.id === id ? { ...row, ...change } : row))
-    setIssue('')
-  }
-  const addTopic = () => {
-    if (saving || editingId !== null) return
-    const value = input.trim()
-    if (!value) return
-    const existing = draft.find((topic) => topic.value === value)
-    if (existing && !existing.removed) {
-      setIssue('该主题已存在，请使用其他主题。')
-      return
-    }
-    if (existing) updateTopic(existing.id, { removed: false })
-    else {
-      const id = nextId.current++
-      setDraft((rows) => [...rows, { id, original: null, value, removed: false }])
-    }
-    setInput('')
-    setIssue('')
-  }
-  const confirmEdit = () => {
-    const value = editValue.trim()
-    if (!value) {
-      setIssue('主题不能为空，请填写主题后确认修改。')
-      return
-    }
-    if (draft.some((topic) => topic.id !== editingId && topic.value === value)) {
-      setIssue('该主题已存在，请使用其他主题。')
-      return
-    }
-    if (editingId !== null) updateTopic(editingId, { value })
-    setEditingId(null)
-  }
-
+  const topicEditor = useTopicDraft(topics, open, saving)
   return <Drawer title={<><span className="drawer-kicker">GITHUB FOCUS</span><strong id="github-topics-title">关注主题</strong></>}
     aria-labelledby="github-topics-title" size={520} open={open} onClose={() => { if (!saving) onClose() }}
     closable={!saving} mask={{ closable: !saving }} keyboard={!saving} destroyOnHidden
-    footer={<div className="github-topics-footer">
-      <div role="status" aria-live="polite" className="github-topics-changes">新增 {added} · 修改 {modified} · 移除 {removed}</div>
-      <p>{editingId !== null ? '请先确认修改或取消编辑。' : input.trim() ? '请先点击添加主题，或清空输入后保存。' : hasChanges ? '保存后生效，可在保存前撤销移除。' : '尚无更改。'}</p>
-      <div className="github-topics-footer-actions">
+    footer={<div className="topics-footer">
+      <TopicChangeSummary editor={topicEditor} />
+      <div className="topics-footer-actions">
         <Button aria-label="取消" disabled={saving} onClick={onClose}>取消</Button>
-        <Button type="primary" loading={saving} disabled={!hasChanges || editingId !== null || Boolean(input.trim())}
-          onClick={() => onSave(active.map((topic) => topic.value))}>保存关注主题</Button>
+        <Button type="primary" loading={saving} disabled={!topicEditor.hasChanges || topicEditor.blocked}
+          onClick={() => onSave(topicEditor.values)}>保存关注主题</Button>
       </div>
     </div>}>
     <p className="drawer-copy">设置你关心的方向，平台将在下一轮探索时按这些主题寻找并研究新项目。已进入历史报告的项目不会再次推荐。</p>
-    <div className="github-topics-add">
-      <label htmlFor="github-topic-input">新增关注主题</label>
-      <div className="github-topics-add-controls">
-        <Input id="github-topic-input" placeholder="如 testing、AI testing、rag" value={input} disabled={saving || editingId !== null}
-          onChange={(event) => { setInput(event.target.value); setIssue('') }}
-          onPressEnter={(event) => { if (!event.nativeEvent.isComposing) { event.preventDefault(); addTopic() } }} />
-        <Button icon={<PlusOutlined />} disabled={saving || editingId !== null || !input.trim()} onClick={addTopic}>添加主题</Button>
-      </div>
-      <p>每次添加一个主题，支持空格；也可以按回车确认添加。</p>
-    </div>
-    {issue && <Alert type="error" showIcon title={issue} className="github-topics-error" />}
-    <div className="github-topics-heading"><strong>关注方向</strong><span>{active.length} 个主题</span></div>
-    {!draft.length && <p className="github-topics-empty">尚未添加关注主题，平台将按默认语言范围探索项目。</p>}
-    <ul className="github-topics-list" aria-label="关注主题列表">
-      {draft.map((topic) => <li key={topic.id} className={`github-topic-row${topic.removed ? ' is-removed' : ''}`}>
-        {editingId === topic.id ? <div className="github-topic-edit">
-          <Input aria-label="编辑关注主题" autoFocus value={editValue} disabled={saving}
-            onChange={(event) => { setEditValue(event.target.value); setIssue('') }}
-            onPressEnter={(event) => { if (!event.nativeEvent.isComposing) { event.preventDefault(); confirmEdit() } }} />
-          <div className="github-topic-edit-actions">
-            <Button disabled={saving} onClick={() => { setEditingId(null); setIssue('') }}>取消编辑</Button>
-            <Button type="primary" disabled={saving} onClick={confirmEdit}>确认修改</Button>
-          </div>
-        </div> : <>
-          <div className="github-topic-label"><strong>{topic.value}</strong>
-            <span>{topic.removed ? '待移除' : topic.original === null ? '新增待保存' : topic.original !== topic.value ? '修改待保存' : '已保存'}</span>
-          </div>
-          {topic.removed ? <Button icon={<UndoOutlined />} disabled={saving || editingId !== null}
-            aria-label={`撤销移除 ${topic.value}`} onClick={() => updateTopic(topic.id, { removed: false })}>撤销</Button>
-            : <div className="github-topic-actions">
-              <Button type="text" icon={<EditOutlined />} aria-label={`编辑主题 ${topic.value}`} disabled={saving || editingId !== null}
-                onClick={() => { setEditingId(topic.id); setEditValue(topic.value); setIssue('') }}>编辑</Button>
-              <Dropdown trigger={['click']} disabled={saving || editingId !== null} destroyOnHidden
-                menu={{ items: [{ key: 'remove', label: '移除主题', icon: <DeleteOutlined />, danger: true }], onClick: () => updateTopic(topic.id, { removed: true }) }}>
-                <Button type="text" icon={<MoreOutlined />} aria-label={`更多操作 ${topic.value}`} disabled={saving || editingId !== null} />
-              </Dropdown>
-            </div>}
-        </>}
-      </li>)}
-    </ul>
-    {draft.length > 0 && active.length === 0 && <p className="github-topics-empty">保存后将按默认语言范围探索项目。你可以撤销移除，继续保留关注方向。</p>}
+    <TopicEditor editor={topicEditor} inputId="github-topic-input"
+      emptyText="尚未添加关注主题，平台将按默认语言范围探索项目。"
+      clearedText="保存后将按默认语言范围探索项目。你可以撤销移除，继续保留关注方向。" />
   </Drawer>
 }

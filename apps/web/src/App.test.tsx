@@ -19,6 +19,30 @@ const json = (data: unknown, status = 200) => new Response(JSON.stringify(data),
   headers: { 'Content-Type': 'application/json' },
 })
 
+function mockSourceTopicsPage(initialSources = [{ ...source, topics: ['testing', 'playwright'] }], failSave = false) {
+  let items = initialSources
+  return vi.spyOn(globalThis, 'fetch').mockImplementation(async (input, init) => {
+    const path = String(input)
+    if (path === '/api/v1/auth/me') return json({ id: 'maintainer', username: 'maintainer', role: 'maintainer' })
+    if (path.startsWith('/api/v1/sources?')) return json({ items, total: items.length })
+    if (path.startsWith('/api/v1/sources/') && init?.method === 'PATCH') {
+      if (failSave) return json({ detail: 'Source name already exists' }, 409)
+      items = items.map((item) => path === `/api/v1/sources/${item.id}` ? { ...item, ...JSON.parse(String(init.body)) } : item)
+      return json(items.find((item) => path === `/api/v1/sources/${item.id}`))
+    }
+    return json({ items: [], total: 0 })
+  })
+}
+
+async function openSourceTopicsEditor() {
+  render(<App />)
+  await screen.findByRole('heading', { name: '内容情报' })
+  await userEvent.click(screen.getByRole('button', { name: '信源管理' }))
+  const card = (await screen.findByRole('heading', { name: source.name })).closest('article') as HTMLElement
+  await userEvent.click(within(card).getByRole('button', { name: 'edit 编辑' }))
+  return within(await screen.findByRole('dialog'))
+}
+
 const exploration: {
   status: string; started_at: string | null; finished_at: string | null; next_run_at: string | null;
   discovered_count: number; report_id: number | null; error_message: string | null;
@@ -199,6 +223,140 @@ async function openGithubTopicsEditor() {
   return within(await screen.findByRole('dialog', { name: /关注主题/ }))
 }
 
+describe('source topic management', () => {
+  beforeEach(() => { vi.restoreAllMocks() })
+
+  it('keeps source topics when backspace clears the independent add input', async () => {
+    localStorage.setItem('access_token', 'existing-token')
+    const user = userEvent.setup()
+    const fetchMock = mockSourceTopicsPage()
+    const editor = await openSourceTopicsEditor()
+    const input = editor.getByRole('textbox', { name: '新增关注主题' })
+    await user.type(input, 'draft')
+    await user.clear(input)
+    await user.keyboard('{Backspace}')
+    const list = within(editor.getByRole('list', { name: '关注主题列表' }))
+    expect(list.getAllByRole('listitem')).toHaveLength(2)
+    expect(list.getByText('testing')).toBeInTheDocument()
+    expect(list.getByText('playwright')).toBeInTheDocument()
+    expect(editor.queryByRole('button', { name: /移除/ })).not.toBeInTheDocument()
+    expect(editor.getByText('新增 0 · 修改 0 · 移除 0')).toBeInTheDocument()
+    expect(fetchMock.mock.calls.filter(([, init]) => init?.method === 'PATCH')).toHaveLength(0)
+  })
+
+  it('reviews source topic edits and removals before saving the source', async () => {
+    localStorage.setItem('access_token', 'existing-token')
+    const user = userEvent.setup()
+    const fetchMock = mockSourceTopicsPage()
+    const editor = await openSourceTopicsEditor()
+    await user.click(editor.getByRole('button', { name: '编辑主题 testing' }))
+    expect(editor.getByRole('button', { name: '保存修改' })).toBeDisabled()
+    const editInput = editor.getByRole('textbox', { name: '编辑关注主题' })
+    fireEvent.change(editInput, { target: { value: ' AI testing ' } })
+    await user.type(editInput, '{Enter}')
+    const addInput = editor.getByRole('textbox', { name: '新增关注主题' })
+    fireEvent.change(addInput, { target: { value: ' rag ' } })
+    await user.type(addInput, '{Enter}')
+    await user.click(editor.getByRole('button', { name: '更多操作 playwright' }))
+    await user.click(await screen.findByRole('menuitem', { name: /移除主题/ }))
+    expect(editor.getByText('新增 1 · 修改 1 · 移除 1')).toBeInTheDocument()
+    expect(editor.getByText('待移除')).toBeInTheDocument()
+    expect(screen.getByText('#playwright')).toBeInTheDocument()
+    expect(fetchMock.mock.calls.filter(([, init]) => init?.method === 'PATCH')).toHaveLength(0)
+    await user.click(editor.getByRole('button', { name: '保存修改' }))
+    await waitFor(() => expect(fetchMock).toHaveBeenCalledWith(`/api/v1/sources/${source.id}`, expect.objectContaining({
+      method: 'PATCH', headers: expect.objectContaining({ 'Content-Type': 'application/json', Authorization: 'Bearer existing-token' }),
+      body: JSON.stringify({ name: source.name, source_type: source.source_type, trust_level: source.trust_level, homepage_url: source.homepage_url, description: source.description, languages: source.languages, topics: ['AI testing', 'rag'] }),
+    })))
+    await waitFor(() => expect(screen.queryByRole('dialog')).not.toBeInTheDocument())
+    expect(screen.getByText('#AI testing')).toBeInTheDocument()
+    expect(screen.queryByText('#playwright')).not.toBeInTheDocument()
+  })
+
+  it('validates source topics and prevents saving unconfirmed input', async () => {
+    localStorage.setItem('access_token', 'existing-token')
+    const user = userEvent.setup()
+    const fetchMock = mockSourceTopicsPage()
+    const editor = await openSourceTopicsEditor()
+    const addInput = editor.getByRole('textbox', { name: '新增关注主题' })
+    fireEvent.change(addInput, { target: { value: ' testing ' } })
+    expect(editor.getByRole('button', { name: '保存修改' })).toBeDisabled()
+    await user.click(editor.getByRole('button', { name: /添加主题/ }))
+    expect(editor.getByRole('alert')).toHaveTextContent('该主题已存在')
+    fireEvent.change(addInput, { target: { value: '' } })
+    await user.click(editor.getByRole('button', { name: '编辑主题 testing' }))
+    const editInput = editor.getByRole('textbox', { name: '编辑关注主题' })
+    fireEvent.change(editInput, { target: { value: '' } })
+    await user.click(editor.getByRole('button', { name: '确认修改' }))
+    expect(editor.getByRole('alert')).toHaveTextContent('主题不能为空')
+    fireEvent.change(editInput, { target: { value: 'playwright' } })
+    await user.click(editor.getByRole('button', { name: '确认修改' }))
+    expect(editor.getByRole('alert')).toHaveTextContent('该主题已存在')
+    await user.click(editor.getByRole('button', { name: '取消编辑' }))
+    expect(editor.getByText('新增 0 · 修改 0 · 移除 0')).toBeInTheDocument()
+    expect(editor.getByRole('list', { name: '关注主题列表' })).toHaveTextContent('testing')
+    expect(editor.getByRole('button', { name: '保存修改' })).toBeEnabled()
+    expect(fetchMock.mock.calls.filter(([, init]) => init?.method === 'PATCH')).toHaveLength(0)
+  })
+
+  it('requires at least one source topic and recovers from clearing the list with undo', async () => {
+    localStorage.setItem('access_token', 'existing-token')
+    const user = userEvent.setup()
+    const fetchMock = mockSourceTopicsPage()
+    const editor = await openSourceTopicsEditor()
+    for (const topic of ['testing', 'playwright']) {
+      await user.click(editor.getByRole('button', { name: `更多操作 ${topic}` }))
+      await user.click(await screen.findByRole('menuitem', { name: /移除主题/ }))
+    }
+    expect(editor.getByRole('button', { name: '保存修改' })).toBeDisabled()
+    expect(editor.getByText(/请至少添加一个关注主题/)).toBeInTheDocument()
+    await user.click(editor.getByRole('button', { name: '撤销移除 testing' }))
+    expect(editor.getByRole('button', { name: '保存修改' })).toBeEnabled()
+    expect(fetchMock.mock.calls.filter(([, init]) => init?.method === 'PATCH')).toHaveLength(0)
+  })
+
+  it('discards source topic drafts on close and isolates topics between sources', async () => {
+    localStorage.setItem('access_token', 'existing-token')
+    const user = userEvent.setup()
+    const another = { ...source, id: 'source-2', name: 'Testing Weekly', topics: ['evaluation'] }
+    const fetchMock = mockSourceTopicsPage([{ ...source, topics: ['testing', 'playwright'] }, another])
+    const editor = await openSourceTopicsEditor()
+    await user.type(editor.getByRole('textbox', { name: '新增关注主题' }), 'rag{Enter}')
+    await user.click(editor.getByRole('button', { name: '更多操作 testing' }))
+    await user.click(await screen.findByRole('menuitem', { name: /移除主题/ }))
+    await user.click(editor.getByRole('button', { name: '取消' }))
+    await waitFor(() => expect(screen.queryByRole('dialog')).not.toBeInTheDocument())
+    const originalCard = screen.getByRole('heading', { name: source.name }).closest('article') as HTMLElement
+    await user.click(within(originalCard).getByRole('button', { name: 'edit 编辑' }))
+    const reopened = within(await screen.findByRole('dialog'))
+    expect(reopened.getByRole('list', { name: '关注主题列表' })).toHaveTextContent('testing')
+    expect(reopened.queryByText('rag')).not.toBeInTheDocument()
+    expect(reopened.queryByText('待移除')).not.toBeInTheDocument()
+    await user.click(reopened.getByRole('button', { name: '取消' }))
+    await waitFor(() => expect(screen.queryByRole('dialog')).not.toBeInTheDocument())
+    const otherCard = screen.getByRole('heading', { name: another.name }).closest('article') as HTMLElement
+    await user.click(within(otherCard).getByRole('button', { name: 'edit 编辑' }))
+    const otherEditor = within(await screen.findByRole('dialog'))
+    expect(otherEditor.getByRole('list', { name: '关注主题列表' })).toHaveTextContent('evaluation')
+    expect(otherEditor.queryByText('testing')).not.toBeInTheDocument()
+    expect(otherEditor.getByText('新增 0 · 修改 0 · 移除 0')).toBeInTheDocument()
+    expect(fetchMock.mock.calls.filter(([, init]) => init?.method === 'PATCH')).toHaveLength(0)
+  })
+
+  it('retains source topic drafts when saving the source fails', async () => {
+    localStorage.setItem('access_token', 'existing-token')
+    const user = userEvent.setup()
+    mockSourceTopicsPage(undefined, true)
+    const editor = await openSourceTopicsEditor()
+    await user.type(editor.getByRole('textbox', { name: '新增关注主题' }), 'rag{Enter}')
+    await user.click(editor.getByRole('button', { name: '保存修改' }))
+    expect(await screen.findByText('信源名称已存在，请修改名称后重试。')).toBeInTheDocument()
+    expect(editor.getByRole('list', { name: '关注主题列表' })).toHaveTextContent('rag')
+    expect(editor.getByText('新增 1 · 修改 0 · 移除 0')).toBeInTheDocument()
+    await waitFor(() => expect(editor.getByRole('button', { name: '保存修改' })).toBeEnabled())
+  })
+})
+
 describe('management radar workflow', () => {
   beforeEach(() => {
     vi.restoreAllMocks()
@@ -365,17 +523,19 @@ describe('management radar workflow', () => {
     await user.click(screen.getByRole('button', { name: '信源管理' }))
     await screen.findByText('暂无信源监听点。')
     await user.click(screen.getByRole('button', { name: '新增信源' }))
-    await user.type(screen.getByLabelText('信源名称'), source.name)
-    await user.click(screen.getByLabelText('信源类型'))
+    const editor = within(await screen.findByRole('dialog'))
+    fireEvent.change(editor.getByLabelText('信源名称'), { target: { value: source.name } })
+    await user.click(editor.getByLabelText('信源类型'))
     await user.click(await screen.findByText('网站'))
-    await user.click(screen.getByLabelText('可信等级'))
+    await user.click(editor.getByLabelText('可信等级'))
     await user.click(await screen.findByText('最高可信'))
-    await user.type(screen.getByLabelText('主页地址'), source.homepage_url)
-    await user.type(screen.getByLabelText('描述'), source.description)
-    await user.click(screen.getByLabelText('语言'))
+    fireEvent.change(editor.getByLabelText('主页地址'), { target: { value: source.homepage_url } })
+    fireEvent.change(editor.getByLabelText('描述'), { target: { value: source.description } })
+    await user.click(editor.getByLabelText('语言'))
     await user.click(await screen.findByText('英语'))
-    await user.type(screen.getByLabelText('关注主题'), 'foundation-models')
-    await user.click(screen.getByRole('button', { name: '建立监听' }))
+    fireEvent.change(editor.getByRole('textbox', { name: '新增关注主题' }), { target: { value: 'foundation-models' } })
+    await user.click(editor.getByRole('button', { name: /添加主题/ }))
+    await user.click(editor.getByRole('button', { name: '建立监听' }))
 
     await waitFor(() => expect(fetchMock).toHaveBeenNthCalledWith(4, '/api/v1/sources', expect.objectContaining({
       method: 'POST',
@@ -425,6 +585,43 @@ describe('management radar workflow', () => {
       }),
     })))
     expect(await screen.findByText('example.com')).toBeInTheDocument()
+  })
+
+  it('manages source topics before installing an automatically discovered source', async () => {
+    localStorage.setItem('access_token', 'existing-token')
+    const user = userEvent.setup()
+    const discovery = { homepage_url: 'https://example.com/', feed_url: 'https://example.com/feed.xml', suggested_name: 'example.com', samples: [] }
+    const fetchMock = vi.spyOn(globalThis, 'fetch').mockImplementation(async (input) => {
+      const path = String(input)
+      if (path === '/api/v1/auth/me') return json({ id: 'maintainer', username: 'maintainer', role: 'maintainer' })
+      if (path === '/api/v1/sources/discover') return json(discovery)
+      if (path === '/api/v1/sources/discover/install') return json({ source, endpoint: {} }, 201)
+      return json({ items: [], total: 0 })
+    })
+    render(<App />)
+    await screen.findByRole('heading', { name: '内容情报' })
+    await user.click(screen.getByRole('button', { name: '信源管理' }))
+    await screen.findByText('暂无信源监听点。')
+    await user.click(screen.getByRole('button', { name: 'radar-chart 自动发现' }))
+    const editor = within(await screen.findByRole('dialog'))
+    fireEvent.change(editor.getByLabelText('网站主页'), { target: { value: discovery.homepage_url } })
+    await user.click(editor.getByRole('button', { name: '开始探测' }))
+    await editor.findByRole('button', { name: '确认并启用监听' })
+    const addInput = editor.getByRole('textbox', { name: '新增关注主题' })
+    fireEvent.change(addInput, { target: { value: ' AI testing ' } })
+    await user.type(addInput, '{Enter}')
+    fireEvent.change(addInput, { target: { value: 'rag' } })
+    expect(editor.getByRole('button', { name: '确认并启用监听' })).toBeDisabled()
+    await user.click(editor.getByRole('button', { name: /添加主题/ }))
+    await user.click(editor.getByRole('button', { name: '更多操作 rag' }))
+    await user.click(await screen.findByRole('menuitem', { name: /移除主题/ }))
+    await user.click(editor.getByRole('button', { name: '撤销移除 rag' }))
+    expect(editor.getByText('新增 2 · 修改 0 · 移除 0')).toBeInTheDocument()
+    expect(fetchMock.mock.calls.filter(([path]) => path === '/api/v1/sources/discover/install')).toHaveLength(0)
+    await user.click(editor.getByRole('button', { name: '确认并启用监听' }))
+    await waitFor(() => expect(fetchMock).toHaveBeenCalledWith('/api/v1/sources/discover/install', expect.objectContaining({
+      method: 'POST', body: JSON.stringify({ homepage_url: discovery.homepage_url, feed_url: discovery.feed_url, name: 'example.com', languages: ['en'], trust_level: 3, topics: ['AI testing', 'rag'] }),
+    })))
   })
 
   it.each([
