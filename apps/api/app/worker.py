@@ -9,6 +9,7 @@ from app.analyzer import analyze_pending, enrich_pending_related_links
 from app.cache import delete_prefix_sync
 from app.config import settings
 from app.database import engine
+from app.email_digest import run_daily_digest
 from app.fetcher import fetch_endpoint
 from app.github_service import run_github_exploration
 from app.models import FetchRun, SourceEndpoint
@@ -74,6 +75,22 @@ def run_github_discovery() -> None:
         logger.exception("GitHub discovery failed")
 
 
+def run_email_digest() -> None:
+    try:
+        with Session(engine) as db:
+            delivery = run_daily_digest(db)
+            if delivery is not None:
+                logger.info(
+                    "Email digest delivery_id=%s status=%s items=%s",
+                    delivery.id,
+                    delivery.status,
+                    delivery.item_count,
+                )
+    except Exception:
+        # SMTP failures are recorded with sanitized messages by the delivery service.
+        logger.error("Email digest task failed; will check again on the next worker poll")
+
+
 def run_once() -> None:
     if engine.dialect.name != "postgresql":
         with Session(engine) as db:
@@ -93,6 +110,7 @@ def run_once() -> None:
                     db.rollback()
                     logger.exception("Unhandled fetch failure endpoint_id=%s", endpoint.id)
         run_analysis()
+        run_email_digest()
         run_github_discovery()
         if any_created:
             delete_prefix_sync("content:list")
@@ -122,6 +140,7 @@ def run_once() -> None:
         finally:
             lock_connection.execute(text("SELECT pg_advisory_unlock(82429101)"))
     run_analysis()
+    run_email_digest()
     run_github_discovery()
     if any_created:
         delete_prefix_sync("content:list")

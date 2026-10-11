@@ -13,6 +13,7 @@ import {
   GlobalOutlined,
   InboxOutlined,
   LogoutOutlined,
+  MailOutlined,
   MoreOutlined,
   PlusOutlined,
   RadarChartOutlined,
@@ -46,6 +47,7 @@ import {
 } from 'antd'
 import type { FormInstance } from 'antd'
 import { userFacingError } from './errors'
+import EmailDigestView from './EmailDigestView'
 
 type Role = 'viewer' | 'maintainer' | 'admin'
 type User = { id: string; username: string; role: Role; is_active?: boolean }
@@ -163,7 +165,7 @@ type GitHubExploration = {
   report_id: number | null
   error_message: string | null
 }
-type Tab = 'content' | 'sources' | 'collection' | 'users' | 'database' | 'github'
+type Tab = 'content' | 'sources' | 'collection' | 'users' | 'database' | 'github' | 'email'
 
 const typeLabels: Record<string, string> = { website: '网站', newsletter: '通讯', rss: 'RSS', social: '社交媒体', wechat: '微信公众号', weibo: '微博' }
 const trustLabels: Record<number, string> = { 5: '最高可信', 4: '高可信', 3: '待验证', 2: '观察中', 1: '低可信' }
@@ -871,6 +873,7 @@ export default function App() {
     { id: 'collection', label: '采集管理', icon: <InboxOutlined />, admin: true },
     { id: 'database', label: '数据库状态', icon: <DatabaseOutlined />, admin: true },
     { id: 'users', label: '用户管理', icon: <TeamOutlined />, admin: true },
+    { id: 'email', label: '邮件推送', icon: <MailOutlined />, admin: true },
   ]
 
   return (
@@ -897,6 +900,7 @@ export default function App() {
         {tab === 'collection' && isAdmin && <CollectedContentView items={collectedItems} total={collectedTotal} page={collectedPage} loading={loading} saving={saving} sources={sources} query={collectedQuery} status={collectedStatus} disposition={collectedDisposition} sourceId={collectedSource} startDate={collectedStartDate} endDate={collectedEndDate} selectedIds={selectedCollectedIds} onQuery={setCollectedQuery} onStatus={setCollectedStatus} onDisposition={setCollectedDisposition} onSource={setCollectedSource} onStartDate={setCollectedStartDate} onEndDate={setCollectedEndDate} onToggle={(id) => setSelectedCollectedIds((current) => { if (current.includes(id)) return current.filter((value) => value !== id); if (current.length >= 100) { setError('单次最多处理 100 条采集内容'); return current } return [...current, id] })} onTogglePage={() => { const pageIds = collectedItems.map((item) => item.id); const all = pageIds.every((id) => selectedCollectedIds.includes(id)); setSelectedCollectedIds((current) => { if (all) return current.filter((id) => !pageIds.includes(id)); const additions = pageIds.filter((id) => !current.includes(id)); const available = 100 - current.length; if (additions.length > available) setError('单次最多处理 100 条采集内容'); return [...current, ...additions.slice(0, available)] }) }} onApply={() => { const filters = { query: collectedQuery, status: collectedStatus, disposition: collectedDisposition, sourceId: collectedSource, startDate: collectedStartDate, endDate: collectedEndDate }; setAppliedCollectedFilters(filters); setSelectedCollectedIds([]); setCollectedPage(1); void loadCollectedContent(1, filters) }} onReset={() => { const filters = { query: '', status: '', disposition: '', sourceId: '', startDate: '', endDate: '' }; setCollectedQuery(''); setCollectedStatus(''); setCollectedDisposition(''); setCollectedSource(''); setCollectedStartDate(''); setCollectedEndDate(''); setAppliedCollectedFilters(filters); setSelectedCollectedIds([]); setCollectedPage(1); void loadCollectedContent(1, filters) }} onPage={(page) => { setCollectedPage(page); void loadCollectedContent(page, appliedCollectedFilters) }} onReanalyze={(ids) => Modal.confirm({ title: `重新分析 ${ids.length} 条内容？`, content: '现有评分和结论会被清空，内容将重新进入分析队列。', okText: '确认重新分析', cancelText: '取消', onOk: () => reanalyzeCollectedItems(ids) })} onDelete={(ids) => Modal.confirm({ title: `删除 ${ids.length} 条采集内容？`, content: '删除后原始采集记录和分析结果均无法恢复。', okText: '确认删除', cancelText: '取消', okButtonProps: { danger: true }, onOk: () => deleteCollectedItems(ids) })} />}
         {tab === 'users' && isAdmin && <UsersView users={users} loading={loading} me={me} onAdd={() => openUser()} onEdit={openUser} onDelete={(user) => Modal.confirm({ title: `删除用户「${user.username}」？`, content: '该用户将立即失去访问权限。', okText: '确认删除', cancelText: '取消', okButtonProps: { danger: true }, onOk: () => removeUser(user) })} />}
         {tab === 'database' && isAdmin && <DatabaseView data={database} loading={loading} />}
+        {tab === 'email' && isAdmin && <EmailDigestView request={request} />}
         {tab === 'github' && <GitHubView repos={githubRepos} total={githubRepoTotal} reports={githubReports} loading={githubLoading} exploration={githubExploration} canManage={canManageSources} statusFilter={githubStatusFilter} topicFilter={githubTopicFilter} topics={githubTopics} report={githubReport} onStatusFilter={changeGithubStatusFilter} onTopicFilter={changeGithubTopicFilter} onManageTopics={() => setTopicsDrawer(true)} onRefresh={() => void refreshGithub()} onSetStatus={(id, status) => void setRepoStatus(id, status)} onOpenReport={setGithubReport} onCloseReport={() => setGithubReport(null)} />}
       </section>
       <SourceDrawer open={sourceDrawer} editing={editingSource} form={sourceForm} saving={saving} onClose={() => setSourceDrawer(false)} onSave={saveSource} />

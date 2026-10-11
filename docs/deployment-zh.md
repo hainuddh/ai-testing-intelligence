@@ -2,6 +2,8 @@
 
 本文说明如何在 Linux 服务器上使用 Docker Compose 部署 AI Testing Intelligence。命令默认在项目根目录执行，即 `compose.yaml` 所在目录。
 
+每日情报邮件的SMTP参数、迁移和启用步骤见[每日情报邮件说明](daily-email-digest-zh.md)。API与Worker均需读取发件配置，收件邮箱与每日时间由管理员在页面设置。
+
 ## 1. 部署架构
 
 Docker Compose 会启动以下服务：

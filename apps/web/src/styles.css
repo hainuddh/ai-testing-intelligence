@@ -2,6 +2,14 @@
 
 :root { --font-sans: 'Manrope', 'Segoe UI', 'PingFang SC', 'Microsoft YaHei', sans-serif; --font-mono: 'IBM Plex Mono', monospace; --text-secondary: #a6bab3; --text-muted: #9ab2a8; --status-pending: #7fc8ff; --status-analyzed: #8effb8; --status-radar: #8effb8; --status-watch: #ffd978; --status-filtered: #a7b2ae; --status-failed: #ff9d9d; font-family: var(--font-sans); color: #effff4; background: #07110f; font-synthesis: none; }
 * { box-sizing: border-box; }
+.email-digest-view > .ant-alert { margin-bottom: 18px; }
+.email-settings-grid { display: grid; grid-template-columns: minmax(280px, 440px) minmax(280px, 1fr); gap: 24px; margin: 24px 0 32px; }
+.email-settings-panel { padding: 26px; background: rgba(10,25,20,.72); border: 1px solid #29463d; border-radius: 12px; }
+.email-settings-panel .ant-input-number { width: 100%; }
+.email-rules h2 { margin: 0 0 12px; font-size: 18px; }.email-rules p { margin: 0 0 24px; color: var(--text-secondary); line-height: 1.8; }.email-rules p:last-child { margin-bottom: 0; }
+.email-history-heading { display: flex; align-items: center; justify-content: space-between; gap: 16px; margin-bottom: 16px; }
+.email-history small { display: block; max-width: 260px; color: var(--text-secondary); white-space: normal; }
+@media (max-width: 760px) { .email-settings-grid { grid-template-columns: 1fr; }.email-settings-panel { padding: 20px; } }
 body { margin: 0; min-width: 320px; min-height: 100vh; background: #07110f; }
 button, input, textarea { font: inherit; }
 

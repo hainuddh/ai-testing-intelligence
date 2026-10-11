@@ -37,6 +37,58 @@ class User(Base):
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utc_now)
 
 
+class EmailDigestPreference(Base):
+    __tablename__ = "email_digest_preferences"
+
+    id: Mapped[int] = mapped_column(primary_key=True)
+    enabled: Mapped[bool] = mapped_column(Boolean, default=False)
+    recipient: Mapped[str] = mapped_column(String(254), default="")
+    value_threshold: Mapped[int] = mapped_column(Integer, default=70)
+    send_time: Mapped[str] = mapped_column(String(5), default="09:00")
+    started_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
+    lease_token: Mapped[str | None] = mapped_column(String(36), nullable=True)
+    lease_until: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
+
+
+class EmailDigestDelivery(Base):
+    __tablename__ = "email_digest_deliveries"
+    __table_args__ = (UniqueConstraint("recipient", "business_date"),)
+
+    id: Mapped[int] = mapped_column(primary_key=True)
+    recipient: Mapped[str] = mapped_column(String(254), index=True)
+    business_date: Mapped[str] = mapped_column(String(10))
+    status: Mapped[str] = mapped_column(String(30), default="pending", index=True)
+    subject: Mapped[str] = mapped_column(String(200), default="")
+    body_text: Mapped[str] = mapped_column(Text, default="")
+    body_html: Mapped[str] = mapped_column(Text, default="")
+    body_markdown: Mapped[str] = mapped_column(Text, default="")
+    item_count: Mapped[int] = mapped_column(Integer, default=0)
+    attempts: Mapped[int] = mapped_column(Integer, default=0)
+    error_message: Mapped[str | None] = mapped_column(Text, nullable=True)
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utc_now)
+    attempted_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
+    sent_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
+    next_attempt_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
+
+    items: Mapped[list["EmailDigestItem"]] = relationship(
+        cascade="all, delete-orphan", order_by="EmailDigestItem.rank"
+    )
+
+
+class EmailDigestItem(Base):
+    __tablename__ = "email_digest_items"
+    __table_args__ = (UniqueConstraint("delivery_id", "content_hash"),)
+
+    id: Mapped[int] = mapped_column(primary_key=True)
+    delivery_id: Mapped[int] = mapped_column(
+        ForeignKey("email_digest_deliveries.id", ondelete="CASCADE"), index=True
+    )
+    # Keep receipts even when collected content is deleted and imported again.
+    content_id: Mapped[int] = mapped_column(Integer)
+    content_hash: Mapped[str] = mapped_column(String(64), index=True)
+    rank: Mapped[int] = mapped_column(Integer)
+
+
 class Source(Base):
     __tablename__ = "sources"
 

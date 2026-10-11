@@ -10,6 +10,13 @@ class Settings(BaseSettings):
     jwt_algorithm: str = "HS256"
     access_token_expire_minutes: int = 60
     worker_poll_seconds: int = 60
+    smtp_host: str = ""
+    smtp_port: int = 587
+    smtp_username: str = ""
+    smtp_password: str = ""
+    smtp_from: str = ""
+    smtp_security: str = "starttls"  # starttls / ssl; TLS is always required.
+    smtp_timeout_seconds: int = 30
     fetch_timeout_seconds: int = 20
     fetch_max_bytes: int = 5_000_000
     github_token: str = ""  # 预留：MVP 不接 PAT，非空时客户端自动带 Bearer

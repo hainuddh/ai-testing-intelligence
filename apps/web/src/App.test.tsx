@@ -44,6 +44,44 @@ function mockGithubPage({ status = exploration, reports = [githubReport], role =
   })
 }
 
+describe('daily email digest', () => {
+  beforeEach(() => { vi.restoreAllMocks() })
+
+  it('lets an administrator configure the daily digest and read delivery history', async () => {
+    localStorage.setItem('access_token', 'admin-token')
+    const preferences = { enabled: false, recipient: '', value_threshold: 70, send_time: '09:00', smtp_configured: false }
+    const fetchMock = vi.spyOn(globalThis, 'fetch').mockImplementation(async (input, init) => {
+      const path = String(input)
+      if (path === '/api/v1/auth/me') return json({ id: 'admin', username: 'admin', role: 'admin' })
+      if (path === '/api/v1/email-digest/preferences') return json(init?.method === 'PUT' ? { ...preferences, ...JSON.parse(String(init.body)) } : preferences)
+      if (path.startsWith('/api/v1/email-digest/deliveries')) return json({ items: [{ id: 1, recipient: 'reader@example.com', business_date: '2026-10-10', status: 'sent', item_count: 3, attempts: 1, created_at: '2026-10-10T01:00:00Z', sent_at: '2026-10-10T01:00:02Z', next_attempt_at: null, error_message: null }], total: 1 })
+      return json({ items: [], total: 0 })
+    })
+    render(<App />)
+    await screen.findByRole('heading', { name: '内容情报' })
+    await userEvent.click(screen.getByRole('button', { name: '邮件推送' }))
+    await screen.findByRole('heading', { name: '每日情报邮件' })
+    expect(await screen.findByText(/尚未配置发件服务/)).toBeInTheDocument()
+    expect(screen.getByLabelText('价值分超过')).toHaveValue('70')
+    expect(screen.getByLabelText('每日发送时间')).toHaveValue('09:00')
+    expect(await screen.findByText('已发送')).toBeInTheDocument()
+    await userEvent.type(screen.getByLabelText('收件邮箱'), 'reader@example.com')
+    await userEvent.click(screen.getByRole('switch', { name: '启用每日邮件' }))
+    fireEvent.change(screen.getByLabelText('每日发送时间'), { target: { value: '10:30' } })
+    await userEvent.click(screen.getByRole('button', { name: '保存邮件设置' }))
+    await waitFor(() => expect(fetchMock).toHaveBeenCalledWith('/api/v1/email-digest/preferences', expect.objectContaining({ method: 'PUT', body: JSON.stringify({ enabled: true, recipient: 'reader@example.com', value_threshold: 70, send_time: '10:30' }) })))
+    expect(await screen.findByText('邮件设置已保存')).toBeInTheDocument()
+  })
+
+  it('hides email administration from viewers and maintainers', async () => {
+    localStorage.setItem('access_token', 'reader-token')
+    vi.spyOn(globalThis, 'fetch').mockImplementation(async (input) => String(input) === '/api/v1/auth/me' ? json({ id: 'reader', username: 'reader', role: 'maintainer' }) : json({ items: [], total: 0 }))
+    render(<App />)
+    await screen.findByRole('heading', { name: '内容情报' })
+    expect(screen.queryByRole('button', { name: '邮件推送' })).not.toBeInTheDocument()
+  })
+})
+
 async function openGithubTopicsEditor() {
   render(<App />)
   await screen.findByRole('heading', { name: '内容情报' })
@@ -453,7 +491,7 @@ describe('management radar workflow', () => {
     render(<App />)
     await screen.findByRole('heading', { name: '内容情报' })
     expect(within(screen.getByRole('navigation', { name: '管理导航' })).getAllByRole('button').map((button) => button.getAttribute('aria-label'))).toEqual([
-      '内容情报', 'GitHub 追踪', '信源管理', '采集管理', '数据库状态', '用户管理',
+      '内容情报', 'GitHub 追踪', '信源管理', '采集管理', '数据库状态', '用户管理', '邮件推送',
     ])
     await user.click(screen.getByRole('button', { name: '用户管理' }))
     expect(await screen.findByText('operator')).toBeInTheDocument()
