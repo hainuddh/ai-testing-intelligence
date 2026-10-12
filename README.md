@@ -1,24 +1,47 @@
 # AI Testing Intelligence
 
-AI intelligent testing content discovery, source management, lossless extraction, historical deduplication, and Markdown delivery.
+SIGNAL ATLAS turns technical content and GitHub projects into actionable testing intelligence: source collection, historical deduplication, analysis, automatic project research, Markdown reports, and daily email digests.
+
+## Product documentation
+
+Current product scope and behavior, reviewed on 2026-10-11:
+
+- [产品说明 / Product overview](docs/product-overview-zh.md): capabilities, roles, workflows, topic management, delivery rules, and current limits.
+- [用户操作手册 / User manual](docs/user-manual-zh.md): navigation and daily operations.
+- [每日情报邮件 / Daily email](docs/daily-email-digest-zh.md): recipient windows, eligibility, schedules, statuses, SMTP, and troubleshooting.
+- [GitHub automatic discovery](docs/github-auto-discovery-plan.md): current discovery and historical-report exclusion rules; older sections are explicitly historical.
+
+GitHub research runs automatically and recommends at most five previously unreported projects per business day. Source and GitHub topics use explicit add/edit/remove drafts with undo before saving. Email combines eligible content and GitHub reports for each recipient. Existing daily batches retain their original schedule after a time setting changes; empty digests are skipped. Preparation completion and email delivery are separate states.
 
 ## Development
 
 Backend commands are run from `apps/api`:
 
 ```bash
-python -m pip install -e ".[dev]"
-alembic upgrade head
-pytest
-uvicorn app.main:app --reload
+uv venv
+uv pip install --python .venv/bin/python -e ".[dev]" --index-url https://mirrors.aliyun.com/pypi/simple/
+uv run --no-project .venv/bin/alembic upgrade head
+uv run --no-project .venv/bin/pytest
+uv run --no-project .venv/bin/uvicorn app.main:app --reload
 ```
+
+These commands use a project-local virtual environment. On Windows, use `.venv\Scripts\python.exe`, `.venv\Scripts\alembic.exe`, `.venv\Scripts\pytest.exe`, and `.venv\Scripts\uvicorn.exe` for the corresponding paths.
+
+Run the background processes in separate terminals from `apps/api`:
+
+```bash
+uv run --no-project .venv/bin/python -m app.worker
+uv run --no-project .venv/bin/python -m app.mail_sender
+```
+
+Set the local backend environment in `apps/api/.env` for all three processes; the root `.env` is used by Docker Compose. See the email guide for SMTP setup. The API alone does not run scheduled collection or email delivery.
 
 The web application is under `apps/web`:
 
 ```bash
-npm install
-npm test -- --run
-npm run dev
+pnpm install
+pnpm exec vitest run
+pnpm dev
 ```
 
 For end-user instructions covering roles, intelligence search and export, source management,
@@ -47,7 +70,7 @@ Create `.env` from `.env.example`, replace all secrets, then start the stack:
 docker compose up --build
 ```
 
-The management UI is available at `http://localhost:8080`. PostgreSQL, Redis, and MinIO
+The management UI is available at `http://localhost:8080`. The stack includes API, collection/research Worker, independent `mail-sender`, Web, PostgreSQL, Redis, MinIO, and a one-shot migration service. PostgreSQL, Redis, and MinIO
 are only available to containers on the internal Compose network.
 
 Create the first administrator after the API is running:
@@ -97,9 +120,11 @@ radar, and generates the in-app summary, testing scenarios, adoption suggestions
 Without a configured model, collected articles remain pending and the intelligence feed is
 intentionally empty rather than presenting unreviewed general AI news.
 
-Only HTTPS analysis endpoints are accepted. By default, analysis sends the feed title and
-summary, not a separately downloaded full article. Set `ATI_ANALYSIS_FETCH_FULL_CONTENT=true`
-only after reviewing the model provider's data retention, copyright, and cost implications.
+Only HTTPS analysis endpoints are accepted. Analysis uses the stored body or summary and
+can fetch article text adaptively when evidence is short or the initial result needs more
+context. Adaptive retrieval is enabled by default; WeChat and Weibo sources are excluded
+from this page-fetching path. `ATI_ANALYSIS_FETCH_FULL_CONTENT=true` enables broader article
+prefetching. See the deployment guide for these settings and the separate related-link stage.
 
 Select one or more analyzed intelligence cards in the web interface and use **Export
 Markdown** to download a merged testing report. Reports preserve the selection order and

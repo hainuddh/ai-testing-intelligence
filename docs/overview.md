@@ -1,5 +1,7 @@
 # 公众号复制版交付概览
 
+> 本文件是公众号复制版 HTML 的交付记录，不是当前产品功能总览。整体定位、已实现能力、权限和使用边界请阅读[产品总览](product-overview-zh.md)。下列记录仅说明当时的公众号排版交付。
+
 1. 已将 `wechat-platform-introduction-zh.md` 转换为微信公众号复制粘贴专用 HTML：`wechat-platform-introduction-zh-wechat-copy.html`。
 2. 页面采用单文件结构，正文样式全部内联，不依赖外部 CSS、字体、脚本或图片。
 3. 已加入一键复制正文按钮，可在浏览器打开后复制并粘贴至微信公众号图文编辑器。

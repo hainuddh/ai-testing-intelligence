@@ -2,7 +2,7 @@
 
 本文说明如何在 Linux 服务器上使用 Docker Compose 部署 AI Testing Intelligence。命令默认在项目根目录执行，即 `compose.yaml` 所在目录。
 
-每日情报邮件的SMTP参数、迁移和启用步骤见[每日情报邮件说明](daily-email-digest-zh.md)。API与Worker均需读取发件配置，收件邮箱与每日时间由管理员在页面设置。
+当前产品能力见[产品说明](product-overview-zh.md)。每日情报邮件的SMTP参数、迁移和启用步骤见[每日情报邮件说明](daily-email-digest-zh.md)。API、Worker和独立的`mail-sender`均需读取一致的发件配置，收件邮箱与每日时间由管理员在页面设置。
 
 ## 1. 部署架构
 
@@ -12,7 +12,7 @@ Docker Compose 会启动以下服务：
 | --- | --- | --- |
 | `web` | Nginx、前端静态资源和 API 反向代理 | `8080` |
 | `api` | FastAPI 应用（异步读路径 + Redis 缓存） | 无 |
-| `worker` | 定时采集 RSS/Atom 和网页内容，分析后失效缓存 | 无 |
+| `worker` | 定时采集和分析内容、自动研究GitHub项目、准备每日邮件批次、失效缓存 | 无 |
 | `mail-sender` | 独立投递已准备好的每日情报邮件，按邮箱去重和重试 | 无 |
 | `migrate` | 启动前执行一次数据库迁移 | 无 |
 | `postgres` | PostgreSQL 17 和 pgvector | 无 |
@@ -38,7 +38,7 @@ Docker Compose 会启动以下服务：
 - PostgreSQL 配置 `shared_buffers=256MB`、`work_mem=4MB`、`max_connections=30`，降低每连接内存占用；
 - Redis 限制 `--maxmemory 128mb --maxmemory-policy allkeys-lru`，防止缓存无限膨胀；
 - 各容器设置 `mem_limit`，避免单个服务耗尽整机内存触发 swap 抖动；
-- API 数据库连接池收敛到 `pool_size=3, max_overflow=3`，Worker 使用 `1,1`；
+- Compose中API数据库连接池默认 `pool_size=3, max_overflow=3`，Worker为 `4,2`，独立投递服务为 `2,2`；
 - 读路径异步化（`async def` + `AsyncSession`），列表查询延迟加载 `body` 大字段，并通过 Redis 缓存列表、详情和统计结果。
 
 检查 Docker：
@@ -167,16 +167,16 @@ docker compose ps
 查看启动日志：
 
 ```bash
-docker compose logs --tail 200 migrate api worker web postgres
+docker compose logs --tail 200 migrate api worker mail-sender web postgres
 ```
 
 需要持续查看日志时：
 
 ```bash
-docker compose logs -f api worker web
+docker compose logs -f api worker mail-sender web
 ```
 
-首次启动和升级时，`migrate` 服务会先执行 Alembic 数据库迁移；迁移成功后 API 和 Worker 才会启动。
+首次启动和升级时，`migrate` 服务会先执行 Alembic 数据库迁移；迁移成功后API、Worker和`mail-sender`才会启动。Worker完成准备，独立投递服务处理邮件队列；邮件「准备完成」不能代替「已发送」验收。
 
 ### 6.1 构建加速与依赖版本锁定
 
@@ -272,13 +272,11 @@ Worker 会读取新采集和历史待分析内容，生成测试相关性、测�
 未配置模型时，内容保持 `pending`，主雷达有意不展示未经分析的通用资讯。模型密钥不得提交
 到 Git，也不要写入日志或文档。
 
-默认只把 RSS/Atom 提供的标题和摘要发送给模型服务，不会在模型分析前额外下载并发送文章
-全文。高价值内容在模型分析完成后可能读取原文页面用于本地提取相关链接，但页面正文不会因此
-再次发送给模型。如果明确接受相应的数据传输、版权和模型调用成本风险，可设置
-`ATI_ANALYSIS_FETCH_FULL_CONTENT=true`。
-建议优先使用企业内部模型网关或具有明确数据保留政策的模型服务，并限制密钥额度。系统还会
-先通过测试、质量、评测、可靠性、安全、缺陷、回归等确定性信号筛选候选文章，再调用模型，
-降低通用热点、提示注入和无效调用进入主雷达的概率。
+模型使用已存正文或摘要，正文/摘要最多取12000字符。当前默认开启自适应原文补充：摘要较短、信源线索需要补充，或初次分析证据不足时，可能读取原文并用于模型分析；微信/微博信源不走此原文补充路径。`ATI_ANALYSIS_FETCH_FULL_CONTENT=true`会更广泛地预取缺少正文的文章。
+
+相关配置包括`ATI_ANALYSIS_ADAPTIVE_FULL_CONTENT`（默认true）和`ATI_ANALYSIS_MIN_SUMMARY_CHARS`（默认240）。如需关闭分析阶段的额外原文读取，应同时关闭自适应与全量预取；已存正文仍可能用于分析。当前Compose显式映射了`ATI_ANALYSIS_FETCH_FULL_CONTENT`，其余可选项如需覆盖，须加入Worker的容器环境配置，不能只在根目录`.env`新增变量而不传入容器。
+
+高价值内容的相关链接提取属于另一个阶段：受限读取原文并在本地提取真实链接，不再次调用模型。测试、质量、评测等确定性关键词只用于分析调度和线索提示，未命中不能直接认定内容不相关；最终由分析结果和准入规则决定分层。
 
 ### 7.3 微信公众号与微博信源
 
@@ -438,7 +436,7 @@ git checkout <目标版本标签或提交哈希>
 docker compose build --pull
 docker compose up -d
 docker compose ps
-docker compose logs --tail 200 migrate api worker web
+docker compose logs --tail 200 migrate api worker mail-sender web
 ```
 
 更新后重新执行健康检查，并确认 `migrate` 服务为 `Exited (0)`。若本次升级引入了缓存相关改动，建议在升级后执行 `docker compose restart api worker`，让缓存版本号与代码保持一致。之后做登录、查询、创建信源等冒烟测试。
@@ -447,7 +445,7 @@ docker compose logs --tail 200 migrate api worker web
 
 - 依赖版本已锁定，升级构建会自动复用 Docker 缓存；若 `pip install` 或 `npm ci` 报版本解析错误，说明依赖锁定与实际环境不符，升级时应一并更新 `pyproject.toml` / `package.json` 与 lock 文件。
 - 若清除了 Docker 缓存（`docker compose build --no-cache`）或更换了基础镜像版本，首次构建会重新下载全部依赖，属正常现象。
-- 升级涉及迁移脚本时，`migrate` 服务必须成功退出（`Exited (0)`）后 API/Worker 才会启动；若迁移失败，先回滚到备份，不要直接删除数据卷。
+- 升级涉及迁移脚本时，`migrate` 服务必须成功退出（`Exited (0)`）后API、Worker和`mail-sender`才会启动；若迁移失败，先回滚到备份，不要直接删除数据卷。
 
 ## 12. 数据备份
 
