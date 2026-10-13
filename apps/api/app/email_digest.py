@@ -386,7 +386,7 @@ def render_summary(
     items: list[ContentItem], business_date: str, repos: list[GitHubRepo] | None = None
 ) -> tuple[str, str]:
     repos = repos or []
-    title = f"每日高价值测试情报 · {business_date} · {len(items) + len(repos)}条"
+    title = f"每日测试情报 · {business_date} · {len(items) + len(repos)}条"
     text = [title, ""]
     html = [
         '<!doctype html><html lang="zh-CN"><meta charset="utf-8"><body>',
@@ -613,7 +613,7 @@ def run_claimed_digest(
     delivery.batch_id = batch.id if batch else None
     delivery.status = "pending" if item_count else "skipped"
     delivery.created_at = now
-    delivery.subject = f"每日高价值测试情报 · {today} · {item_count}条"
+    delivery.subject = f"每日测试情报 · {today} · {item_count}条"
     delivery.body_text = body_text if item_count else ""
     delivery.body_html = body_html if item_count else ""
     delivery.body_markdown = markdown if item_count else ""

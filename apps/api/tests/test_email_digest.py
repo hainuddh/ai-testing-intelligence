@@ -273,7 +273,12 @@ def test_multipart_message_escapes_html_and_has_markdown_attachment(db_session, 
         delivery = run_single_digest(db_session, now=NOW)
     message = service.build_message(delivery)
     assert message["To"] == "reader@example.com"
+    title = "每日测试情报 · 2026-10-10 · 1条"
+    assert delivery.subject == title
+    assert message["Subject"] == title
+    assert message.get_body(preferencelist=("plain",)).get_content().splitlines()[0] == title
     html = message.get_body(preferencelist=("html",)).get_content()
+    assert f"<h1>{title}</h1>" in html
     assert "<script>" not in html and "<img" not in html
     assert "javascript:" not in html
     attachments = list(message.iter_attachments())
