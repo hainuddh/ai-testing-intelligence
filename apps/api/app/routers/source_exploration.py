@@ -49,6 +49,10 @@ class CandidateResponse(BaseModel):
     name: str
     homepage_url: str
     feed_url: str
+    endpoint_type: str = "rss"
+    check_count: int = 0
+    success_count: int = 0
+    evaluation: dict = Field(default_factory=dict)
     topics: list[str]
     language: str
     discovery_kind: str
@@ -63,6 +67,13 @@ class CandidateResponse(BaseModel):
     next_check_at: datetime | None
     last_error: str | None
     promoted_source_id: int | None
+
+    @field_validator("samples")
+    @classmethod
+    def summaries_only(cls, samples):
+        return [
+            {key: value for key, value in sample.items() if key != "body"} for sample in samples
+        ]
 
 
 class CandidateAction(BaseModel):
@@ -82,7 +93,7 @@ def update_preferences(payload: PreferenceUpdate, db: DbSession, _user: Maintain
         setattr(pref, name, value)
     pref.next_run_at = None
     pref.lease_token, pref.lease_until = None, None  # Invalidate stale in-flight results.
-    kept = 0
+    kept = {"article": 0, "source": 0}
     for trial in db.scalars(
         select(SourceCandidate)
         .where(SourceCandidate.status.in_(ACTIVE))
@@ -98,11 +109,15 @@ def update_preferences(payload: PreferenceUpdate, db: DbSession, _user: Maintain
             )
             or bool(matched_topics(description, pref.excluded_terms))
         )
-        if outside_scope or kept >= pref.max_trial_sources:
+        from app.web_discovery import ARTICLE_CAP
+
+        group = "article" if trial.endpoint_type == "article" else "source"
+        cap = ARTICLE_CAP if group == "article" else pref.max_trial_sources
+        if outside_scope or kept[group] >= cap:
             trial.status = "paused"
             trial.last_error = "探索范围或试运行上限已调整，此候选已暂停；已有样例仍保留。"
         else:
-            kept += 1
+            kept[group] += 1
     db.commit()
     db.refresh(pref)
     return pref
@@ -130,8 +145,15 @@ def list_candidates(
         .offset(offset)
         .limit(limit)
     )
+    from app.web_discovery import candidate_summary
+
+    results = []
+    for row in items:
+        result = CandidateResponse.model_validate(row)
+        result.evaluation = candidate_summary(row)
+        results.append(result)
     return {
-        "items": [CandidateResponse.model_validate(row) for row in items],
+        "items": results,
         "total": total,
         "offset": offset,
         "limit": limit,
@@ -163,18 +185,38 @@ def act(candidate_id: int, payload: CandidateAction, db: DbSession, _user: Maint
     if candidate.status == "promoted":
         raise HTTPException(status_code=409, detail="此信源已正式启用，请在信源列表中管理。")
     if payload.action == "resume":
+        from app.web_discovery import ARTICLE_CAP
+
         active_count = db.scalar(
             select(func.count())
             .select_from(SourceCandidate)
-            .where(SourceCandidate.status.in_(ACTIVE), SourceCandidate.id != candidate.id)
+            .where(
+                SourceCandidate.status.in_(ACTIVE),
+                SourceCandidate.id != candidate.id,
+                SourceCandidate.endpoint_type == "article"
+                if candidate.endpoint_type == "article"
+                else SourceCandidate.endpoint_type != "article",
+            )
         )
-        if active_count >= pref.max_trial_sources:
+        if active_count >= (
+            ARTICLE_CAP if candidate.endpoint_type == "article" else pref.max_trial_sources
+        ):
             raise HTTPException(
                 status_code=409, detail="已达到同时试运行上限，请先暂停其他试运行。"
             )
-        candidate.status = "ready" if candidate.analysis_count >= 5 else "trial"
+        candidate.status = (
+            "ready"
+            if candidate.analysis_count >= (1 if candidate.endpoint_type == "article" else 5)
+            else "trial"
+        )
         candidate.next_check_at = None
         pref.next_run_at = None
+        from app.models import SourceDiscoveryPage
+
+        for page in db.scalars(
+            select(SourceDiscoveryPage).where(SourceDiscoveryPage.url == candidate.feed_url)
+        ):
+            page.status, page.next_check_at = "pending", None
     else:
         candidate.status = "paused" if payload.action == "pause" else "dismissed"
     db.commit()

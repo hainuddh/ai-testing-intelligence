@@ -19,6 +19,7 @@ from app.models import (
     ContentItem,
     Source,
     SourceCandidate,
+    SourceDiscoveryPage,
     SourceEndpoint,
     SourceExplorationPreference,
 )
@@ -26,7 +27,8 @@ from app.source_catalog import CATALOG, CatalogSource
 from app.source_management import ensure_feed_available, normalize_feed_url
 
 SCOPE_NOTE = (
-    "从维护的信源目录与已采集内容的真实引用站点中探索，当前不覆盖全网；试运行后由你确认启用。"
+    "从维护目录、已分析内容与试运行样例的真实链接扩展，最多两层；支持订阅、网页列表和独立文章，"
+    "不使用全网搜索。独立内容确认收录，持续网站确认启用。"
 )
 DAY = timedelta(days=1)
 ACTIVE = ("trial", "ready")
@@ -145,7 +147,9 @@ def discovery_origins(db: Session, pref) -> list[tuple[CatalogSource, str, str]]
     ]
 
 
-def sample_evidence(candidate, items: list[FetchedItem], pref) -> list[dict]:
+def sample_evidence(
+    candidate, items: list[FetchedItem], pref, *, analysis_budget=SAMPLES_PER_CHECK
+) -> list[dict]:
     samples = [dict(sample) for sample in candidate.samples]
     seen = set(candidate.seen_urls)
     for item in items[:SAMPLES_PER_CHECK]:
@@ -165,6 +169,7 @@ def sample_evidence(candidate, items: list[FetchedItem], pref) -> list[dict]:
                 "url": item.url,
                 "published_at": item.published_at.isoformat() if item.published_at else None,
                 "summary": (item.summary or "")[:4000],
+                "body": (item.body or "")[:50000],
                 "analysis_status": "pending",
                 "testing_relevance_score": None,
                 "testing_value_score": None,
@@ -174,7 +179,7 @@ def sample_evidence(candidate, items: list[FetchedItem], pref) -> list[dict]:
                 ),
             }
         )
-    budget = SAMPLES_PER_CHECK
+    budget = analysis_budget
     if settings.analysis_api_base_url and settings.analysis_model:
         for sample in samples:
             if sample["analysis_status"] == "analyzed" or budget == 0:
@@ -193,7 +198,7 @@ def sample_evidence(candidate, items: list[FetchedItem], pref) -> list[dict]:
                 title=sample["title"],
                 url=sample["url"],
                 summary=sample["summary"],
-                body=sample["summary"] or sample["title"],
+                body=sample.get("body") or sample["summary"] or sample["title"],
             )
             try:
                 result = analyze_content(item)
@@ -277,6 +282,7 @@ def run_source_exploration(db: Session, *, now: datetime | None = None) -> None:
                 select(SourceCandidate)
                 .where(
                     SourceCandidate.status.in_(ACTIVE),
+                    SourceCandidate.endpoint_type == "rss",
                     or_(
                         SourceCandidate.sample_count < MAX_SAMPLES,
                         SourceCandidate.analysis_count < SourceCandidate.sample_count,
@@ -305,6 +311,7 @@ def run_source_exploration(db: Session, *, now: datetime | None = None) -> None:
             select(func.count())
             .select_from(SourceCandidate)
             .where(SourceCandidate.status.in_(ACTIVE))
+            .where(SourceCandidate.endpoint_type != "article")
         )
         origins = discovery_origins(db, policy)
         if origins:
@@ -376,6 +383,7 @@ def run_source_exploration(db: Session, *, now: datetime | None = None) -> None:
                 candidate = db.get(SourceCandidate, trial.id, populate_existing=True)
                 if candidate and candidate.status in ACTIVE:
                     candidate.consecutive_failures += 1
+                    candidate.check_count += 1
                     candidate.last_error = "暂时无法读取订阅内容，平台将退避重试；历史样例仍保留。"
                     candidate.last_checked_at = now
                     candidate.next_check_at = now + timedelta(
@@ -413,7 +421,18 @@ def run_source_exploration(db: Session, *, now: datetime | None = None) -> None:
                 else None
             )
             candidate.consecutive_failures = 0
+            candidate.check_count += 1
+            candidate.success_count += 1
             db.commit()
+        from app.web_discovery import run_web_exploration
+
+        run_web_exploration(
+            db,
+            policy,
+            now,
+            origins,
+            lambda: current_lease(db, token, expected) is not None,
+        )
     except Exception:
         db.rollback()
         error = "本轮探索未完成，平台将稍后重试。"
@@ -426,6 +445,14 @@ def run_source_exploration(db: Session, *, now: datetime | None = None) -> None:
                     SourceCandidate.status.in_(ACTIVE), SourceCandidate.next_check_at > now
                 )
             )
+            web_retry = db.scalar(
+                select(func.min(SourceDiscoveryPage.next_check_at)).where(
+                    SourceDiscoveryPage.status != "ignored",
+                    SourceDiscoveryPage.next_check_at > now,
+                )
+            )
+            if web_retry is not None:
+                retry = min(utc(retry), utc(web_retry)) if retry else web_retry
             current.last_completed_at, current.last_error = now, error
             current.discovery_cursor = next_cursor
             current.next_run_at = min(now + DAY, utc(retry)) if retry else now + DAY
@@ -450,10 +477,20 @@ def promote_candidate(db: Session, candidate_id: int, user_id: int) -> dict:
         raise HTTPException(
             status_code=409, detail="请先恢复试运行，并查看实际文章样例后再正式启用。"
         )
+    if candidate.endpoint_type == "article":
+        return promote_article(db, candidate, user_id)
     feed_url, homepage = candidate.feed_url, candidate.homepage_url
+    endpoint_type, topics = candidate.endpoint_type, list(candidate.topics)
     db.commit()
     try:
-        verified, _items = download_feed(feed_url, 3, homepage)
+        if endpoint_type == "web_listing":
+            from app.web_discovery import read_listing
+
+            if not read_listing(feed_url, topics, 3):
+                raise ValueError("Empty listing")
+            verified = feed_url
+        else:
+            verified, _items = download_feed(feed_url, 3, homepage)
     except Exception as exc:
         raise HTTPException(status_code=422, detail="暂时无法验证此订阅，请稍后重试。") from exc
     candidate = db.scalar(
@@ -486,8 +523,8 @@ def promote_candidate(db: Session, candidate_id: int, user_id: int) -> dict:
     )
     endpoint = SourceEndpoint(
         source=source,
-        name="已验证订阅",
-        endpoint_type="rss",
+        name="已验证网页列表" if endpoint_type == "web_listing" else "已验证订阅",
+        endpoint_type=endpoint_type,
         url=normalize_feed_url(verified),
         max_items_per_run=50,
     )
@@ -503,3 +540,60 @@ def promote_candidate(db: Session, candidate_id: int, user_id: int) -> dict:
     delete_prefix_sync("sources:list")
     delete_prefix_sync("sources:endpoints")
     return {"candidate": candidate, "source_id": source.id}
+
+
+def promote_article(db: Session, candidate: SourceCandidate, user_id: int) -> dict:
+    """Explicitly admit one isolated article; never schedule recurring collection."""
+    from app.content_deduplication import find_duplicate_content
+
+    # Serialize approvals along with all other endpoint/source admission paths.
+    ensure_feed_available(db, candidate.feed_url)
+    candidate = db.scalar(
+        select(SourceCandidate)
+        .where(SourceCandidate.id == candidate.id)
+        .with_for_update()
+        .execution_options(populate_existing=True)
+    )
+    if candidate.status == "promoted":
+        return {"candidate": candidate, "source_id": candidate.promoted_source_id}
+    if candidate.status not in ACTIVE or not candidate.samples:
+        raise HTTPException(status_code=409, detail="候选状态已改变，请刷新后重试。")
+    sample = candidate.samples[0]
+    existing = find_duplicate_content(db, sample["url"], sample["title"])
+    if existing:
+        source_id = existing.source_id
+    else:
+        source = Source(
+            name=f"独立内容 · {candidate.id} · {candidate.name}"[:200],
+            source_type="website",
+            homepage_url=candidate.homepage_url,
+            topics=candidate.topics,
+            languages=[candidate.language] if candidate.language else [],
+            trust_level=3,
+            status="draft",
+            created_by=user_id,
+            description="人工确认收录的独立内容，无持续采集任务。",
+        )
+        db.add(source)
+        db.flush()
+        source_id = source.id
+        db.add(
+            ContentItem(
+                source_id=source.id,
+                title=sample["title"],
+                url=sample["url"],
+                summary=sample.get("summary"),
+                body=sample.get("body"),
+                analysis_status="pending",
+            )
+        )
+    candidate.status, candidate.promoted_source_id = "promoted", source_id
+    try:
+        db.commit()
+    except IntegrityError as exc:
+        db.rollback()
+        raise HTTPException(status_code=409, detail="内容刚刚已被收录，请刷新后重试。") from exc
+    db.refresh(candidate)
+    for prefix in ("sources:list", "content:list", "collected:list"):
+        delete_prefix_sync(prefix)
+    return {"candidate": candidate, "source_id": source_id}

@@ -168,7 +168,7 @@ class SourceDiscoveryInstallResponse(BaseModel):
 
 class EndpointCreate(BaseModel):
     name: str = Field(min_length=1, max_length=200)
-    endpoint_type: Literal["rss", "web"]
+    endpoint_type: Literal["rss", "web", "web_listing"]
     url: HttpUrl
     fetch_interval_minutes: int = Field(default=360, ge=15, le=10080)
     max_items_per_run: int = Field(default=50, ge=1, le=500)
@@ -176,7 +176,7 @@ class EndpointCreate(BaseModel):
 
 class EndpointUpdate(BaseModel):
     name: str | None = Field(default=None, min_length=1, max_length=200)
-    endpoint_type: Literal["rss", "web"] | None = None
+    endpoint_type: Literal["rss", "web", "web_listing"] | None = None
     url: HttpUrl | None = None
     fetch_interval_minutes: int | None = Field(default=None, ge=15, le=10080)
     max_items_per_run: int | None = Field(default=None, ge=1, le=500)

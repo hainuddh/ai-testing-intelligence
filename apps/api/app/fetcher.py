@@ -2,6 +2,7 @@ import ipaddress
 import re
 import socket
 import time
+from contextvars import ContextVar
 from dataclasses import dataclass
 from datetime import UTC, datetime
 from email.utils import parsedate_to_datetime
@@ -10,6 +11,7 @@ from urllib.parse import parse_qsl, unquote, urlencode, urljoin, urlparse, urlsp
 from xml.etree import ElementTree
 
 import httpx
+from sqlalchemy import select
 from sqlalchemy.orm import Session
 
 from app.cache import delete_prefix_sync
@@ -18,6 +20,7 @@ from app.content_deduplication import content_url_hash, find_duplicate_content
 from app.models import ContentItem, DigestBatchEndpoint, FetchRun, Source, SourceEndpoint
 
 SUMMARY_ENRICHMENT_LIMIT = 3
+request_guard: ContextVar = ContextVar("fetch_request_guard", default=None)
 
 
 @dataclass
@@ -102,10 +105,15 @@ class FeedDiscoveryParser(HTMLParser):
         relations = values.get("rel", "").lower().split()
         content_type = values.get("type", "").lower().split(";", 1)[0]
         href = values.get("href")
-        if "alternate" in relations and content_type in {
-            "application/rss+xml",
-            "application/atom+xml",
-        } and href:
+        if (
+            "alternate" in relations
+            and content_type
+            in {
+                "application/rss+xml",
+                "application/atom+xml",
+            }
+            and href
+        ):
             self.urls.append(urljoin(self.base_url, href))
 
 
@@ -331,6 +339,9 @@ def download(url: str) -> tuple[str, bytes, str]:
         timeout=settings.fetch_timeout_seconds, follow_redirects=False, trust_env=False
     ) as client:
         for _ in range(6):
+            guard = request_guard.get()
+            if guard is not None:
+                guard(current_url)
             connection_url, hostname = validated_connection_url(current_url)
             parsed = urlparse(current_url)
             host_header = hostname
@@ -416,9 +427,7 @@ def parse_feed(data: bytes, base_url: str, limit: int) -> list[FetchedItem]:
                 summary=plain_text(
                     child_text(entry, "summary", "description", "content", "encoded")
                 ),
-                published_at=parse_date(
-                    child_text(entry, "published", "updated", "pubdate")
-                ),
+                published_at=parse_date(child_text(entry, "published", "updated", "pubdate")),
             )
         )
     return items
@@ -489,7 +498,10 @@ def parse_web(data: bytes, url: str) -> list[FetchedItem]:
 
 
 def fetch_endpoint(
-    db: Session, endpoint: SourceEndpoint, *, batch_job_id: int | None = None,
+    db: Session,
+    endpoint: SourceEndpoint,
+    *,
+    batch_job_id: int | None = None,
 ) -> FetchRun:
     db.refresh(endpoint)
     source = db.get(Source, endpoint.source_id, populate_existing=True)
@@ -526,6 +538,23 @@ def fetch_endpoint(
         elif endpoint.endpoint_type == "web":
             final_url, data, _content_type = download(endpoint.url)
             items = parse_web(data, final_url)
+        elif endpoint.endpoint_type == "web_listing":
+            from app.web_discovery import read_listing
+
+            listing_url, topics, limit = (
+                endpoint.url,
+                list(endpoint.source.topics),
+                endpoint.max_items_per_run,
+            )
+            seen_urls = set(
+                db.scalars(
+                    select(ContentItem.url).where(
+                        ContentItem.source_id == endpoint.source_id,
+                    )
+                )
+            )
+            db.commit()
+            items = read_listing(listing_url, topics, limit, seen_urls=seen_urls)
         else:
             raise ValueError(f"Endpoint type {endpoint.endpoint_type!r} is not fetchable yet")
         created = 0
@@ -554,7 +583,9 @@ def fetch_endpoint(
             if existing is not None:
                 if endpoint.endpoint_type == "web" and existing.url_hash == url_hash:
                     if (existing.title, existing.summary, existing.body) == (
-                        item.title, item.summary, item.body
+                        item.title,
+                        item.summary,
+                        item.body,
                     ):
                         continue
                     existing.title = item.title

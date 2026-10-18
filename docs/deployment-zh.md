@@ -6,7 +6,7 @@
 
 当前产品能力见[产品说明](product-overview-zh.md)。每日情报邮件的SMTP参数、迁移和启用步骤见[每日情报邮件说明](daily-email-digest-zh.md)。API、Worker和独立的`mail-sender`均需读取一致的发件配置，收件邮箱与每日时间由管理员在页面设置。
 
-信源工作台升级需要执行`20261017_01_source_exploration`迁移，并更新API、Worker和Web。关注方向、自动探索与试运行规则见[信源工作台说明](source-management-zh.md)。自动探索由Worker执行，仅更新前端或重启旧容器不会载入新逻辑；试运行不参与正式邮件准备。
+信源工作台升级需要执行到`20261018_01_web_discovery`迁移，并更新API、Worker和Web。该迁移在原工作台迁移后增加网页探索队列、候选类型和读取计数。关注方向、自动探索与试运行规则见[信源工作台说明](source-management-zh.md)。自动探索由Worker执行，仅更新前端或重启旧容器不会载入新逻辑；试运行不参与正式邮件准备。
 
 ## 1. 部署架构
 

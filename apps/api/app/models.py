@@ -211,6 +211,9 @@ class SourceCandidate(Base):
     name: Mapped[str] = mapped_column(String(200))
     homepage_url: Mapped[str] = mapped_column(String(2048))
     feed_url: Mapped[str] = mapped_column(String(2048), unique=True)
+    endpoint_type: Mapped[str] = mapped_column(String(30), default="rss", server_default="rss")
+    check_count: Mapped[int] = mapped_column(Integer, default=0, server_default="0")
+    success_count: Mapped[int] = mapped_column(Integer, default=0, server_default="0")
     topics: Mapped[list[str]] = mapped_column(JSON, default=list)
     language: Mapped[str] = mapped_column(String(30), default="")
     discovery_kind: Mapped[str] = mapped_column(String(30))
@@ -233,6 +236,24 @@ class SourceCandidate(Base):
     updated_at: Mapped[datetime] = mapped_column(
         DateTime(timezone=True), default=utc_now, onupdate=utc_now
     )
+
+
+class SourceDiscoveryPage(Base):
+    """Bounded, durable frontier of URLs actually observed in public content."""
+
+    __tablename__ = "source_discovery_pages"
+
+    id: Mapped[int] = mapped_column(primary_key=True)
+    url: Mapped[str] = mapped_column(String(2048))
+    url_hash: Mapped[str] = mapped_column(String(64), unique=True, default=url_digest)
+    evidence_url: Mapped[str] = mapped_column(String(2048))
+    title: Mapped[str] = mapped_column(String(500), default="")
+    topics: Mapped[list[str]] = mapped_column(JSON, default=list)
+    depth: Mapped[int] = mapped_column(Integer, default=0)
+    status: Mapped[str] = mapped_column(String(30), default="pending", index=True)
+    attempts: Mapped[int] = mapped_column(Integer, default=0)
+    next_check_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), index=True)
+    last_error: Mapped[str | None] = mapped_column(Text, nullable=True)
 
 
 class SourceEndpoint(Base):

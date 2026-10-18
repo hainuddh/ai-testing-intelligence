@@ -282,7 +282,7 @@ def create_endpoint(
     source = db.get(Source, source_id)
     if source is None:
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Source not found")
-    if source.source_type in {"wechat", "weibo"} and payload.endpoint_type == "web":
+    if source.source_type in {"wechat", "weibo"} and payload.endpoint_type != "rss":
         raise HTTPException(
             status_code=status.HTTP_422_UNPROCESSABLE_CONTENT,
             detail="WeChat and Weibo sources only support RSS/Atom endpoints",
@@ -332,7 +332,7 @@ def update_endpoint(
             "endpoint_type",
             endpoint.endpoint_type,
         )
-        == "web"
+        != "rss"
     ):
         raise HTTPException(
             status_code=422, detail="WeChat and Weibo sources only support RSS/Atom endpoints"

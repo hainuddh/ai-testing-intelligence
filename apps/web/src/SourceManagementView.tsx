@@ -30,6 +30,8 @@ type Candidate = {
   evidence_url: string; reason: string; status: string; sample_count: number; relevant_count: number;
   analysis_count: number; last_error: string | null; last_checked_at: string | null; next_check_at: string | null;
   samples: Sample[]
+  endpoint_type?: 'rss' | 'web_listing' | 'article';
+  evaluation?: { recommendation: string; relevant_ratio: number | null; average_value: number | null; check_count: number; success_count: number }
 }
 type Props = {
   request: Request; canManage: boolean; canDelete: boolean; refreshKey: number;
@@ -126,8 +128,9 @@ export default function SourceManagementView(props: Props) {
     else void run().catch(() => {})
   }
   const promote = (candidate: Candidate) => confirm({
-    title: `正式启用「${candidate.name}」？`, content: '启用后按正常周期采集并参与情报分析和邮件准备。试运行样例保留为评估记录。',
-    okText: '确认启用', onOk: () => mutate(`/api/v1/source-exploration/candidates/${candidate.id}/promote`, { method: 'POST' }),
+    title: candidate.endpoint_type === 'article' ? `收录「${candidate.name}」？` : `正式启用「${candidate.name}」？`,
+    content: candidate.endpoint_type === 'article' ? '确认后收录这一篇内容并进入正式分析，不创建持续采集任务。分析达标后可参与雷达与邮件。' : '启用后按正常周期采集并参与情报分析和邮件准备。试运行样例保留为评估记录。',
+    okText: candidate.endpoint_type === 'article' ? '确认收录' : '确认启用', onOk: () => mutate(`/api/v1/source-exploration/candidates/${candidate.id}/promote`, { method: 'POST' }),
   })
   const candidateAction = (candidate: Candidate, action: string) => {
     const run = () => mutate(`/api/v1/source-exploration/candidates/${candidate.id}/action`, { method: 'POST', body: JSON.stringify({ action }) })
@@ -155,13 +158,14 @@ export default function SourceManagementView(props: Props) {
       {view !== 'archived' && <Select id="source-filter-status" aria-label="筛选运行状态" value={status} onChange={setStatus} options={[{ value: '', label: '全部状态' }, { value: 'active', label: '监听中' }, { value: 'paused', label: '已暂停' }, { value: 'draft', label: '待配置' }]} />}
       <Button onClick={() => { setApplied({ query, topic, language, status }); setPage(1) }}>筛选信源</Button>
       <Button type="text" onClick={() => { setQuery(''); setTopic(''); setLanguage(''); setStatus(''); setApplied({ query: '', topic: '', language: '', status: '' }); setPage(1) }}>重置</Button>
-    </div> : <div className="source-trial-explanation"><p>平台自动验证订阅并限额试运行，由你确认是否正式启用。试运行内容不会进入正式邮件。</p><p>{preferences.scope_note}</p><small>最近完成：{dateText(preferences.last_completed_at)} · 下次检查：{dateText(preferences.next_run_at)}</small><div><Button type="text" onClick={() => { setShowIgnored(value => !value); setPage(1) }}>{showIgnored ? '返回试运行' : '查看已忽略'}</Button></div>{preferences.last_error && <Alert type="warning" title={preferences.last_error} />}</div>}
+    </div> : <div className="source-trial-explanation"><p>平台沿真实链接发现订阅、网页列表和独立内容，自动积累样例，由你确认启用或收录。试运行内容不会进入正式邮件。</p><p>{preferences.scope_note}</p><small>最近完成：{dateText(preferences.last_completed_at)} · 下次检查：{dateText(preferences.next_run_at)}</small><p>持续网站使用配置的试运行上限；独立内容另外最多保留10个待评估候选。仅支持公开可读页面，登录、验证码或动态加载可能阻止读取。</p><div><Button type="text" onClick={() => { setShowIgnored(value => !value); setPage(1) }}>{showIgnored ? '返回试运行' : '查看已忽略'}</Button></div>{preferences.last_error && <Alert type="warning" title={preferences.last_error} />}</div>}
     <Spin spinning={loading}><div className="source-workspace-list">
       {view === 'trials' ? candidates.map(candidate => <article className="source-evidence-card" key={candidate.id}>
         <div className="source-evidence-heading"><div><h2>{candidate.name}</h2><p>{candidate.reason}</p></div><Tag>{states[candidate.status] ?? candidate.status}</Tag></div>
-        <div className="tag-row">{candidate.topics.map(topic => <Tag key={topic}>{topic}</Tag>)}</div>
+        <div className="tag-row"><Tag>{candidate.endpoint_type === 'article' ? '独立内容' : candidate.endpoint_type === 'web_listing' ? '网页列表' : 'RSS / Atom'}</Tag>{candidate.topics.map(topic => <Tag key={topic}>{topic}</Tag>)}</div>
         <p>实际样例 {candidate.sample_count} · 已分析 {candidate.analysis_count} · 测试相关 {candidate.relevant_count}/{candidate.analysis_count || '待分析'}</p>
-        {candidate.analysis_count < 5 && <small>样本仍在积累，低频更新不会被判为低质量。</small>}
+        {candidate.endpoint_type !== 'article' && candidate.analysis_count < 5 && <small>样本仍在积累，低频更新不会被判为低质量。</small>}
+        {candidate.evaluation && <p>{candidate.evaluation.recommendation}</p>}
         {candidate.last_error && <Alert type="warning" title={candidate.last_error} />}
         <div className="card-actions"><Button onClick={() => setTrial(candidate)}>查看样例与评估</Button>{canManage && <><Button disabled={saving} onClick={() => candidateAction(candidate, ['paused', 'dismissed'].includes(candidate.status) ? 'resume' : 'pause')}>{['paused', 'dismissed'].includes(candidate.status) ? '恢复试运行' : '暂停试运行'}</Button>{candidate.status !== 'dismissed' && <Button disabled={saving} onClick={() => candidateAction(candidate, 'dismiss')}>忽略</Button>}</>}</div>
       </article>) : items.map(source => <article className="source-evidence-card" key={source.id}>
@@ -185,10 +189,11 @@ export default function SourceManagementView(props: Props) {
       {canDelete && selected && <div className="source-danger-zone"><h3>高级操作</h3><p>日常停用请使用暂停或归档。永久删除会清除关联内容。</p><Button danger onClick={() => { props.onDelete(selected); setSelected(null) }}>永久删除信源</Button></div>}
     </Drawer>
     <Drawer open={Boolean(trial)} aria-labelledby="source-trial-title" title={<span id="source-trial-title">{trial?.name ?? ''} · 试运行评估</span>} onClose={() => setTrial(null)} size="large">
-      {trial && <><p>{trial.reason}</p><p><a href={safeLink(trial.evidence_url)} target="_blank" rel="noreferrer">发现依据</a> · <a href={safeLink(trial.feed_url)} target="_blank" rel="noreferrer">已验证订阅</a></p><p>实际样例 {trial.sample_count} · 已分析 {trial.analysis_count} · 测试相关 {trial.relevant_count}</p>
+      {trial && <><p>{trial.reason}</p><p><a href={safeLink(trial.evidence_url)} target="_blank" rel="noreferrer">发现依据</a> · <a href={safeLink(trial.feed_url)} target="_blank" rel="noreferrer">{trial.endpoint_type === 'article' ? '原始内容' : trial.endpoint_type === 'web_listing' ? '持续跟踪页面' : '已验证订阅'}</a></p><p>实际样例 {trial.sample_count} · 已分析 {trial.analysis_count} · 测试相关 {trial.relevant_count}</p>
+        {trial.evaluation && <><p>{trial.evaluation.recommendation}</p><p>相关样例占比：{trial.evaluation.relevant_ratio === null ? '待分析' : `${trial.evaluation.relevant_ratio}%`} · 平均测试价值：{trial.evaluation.average_value ?? '待分析'} · 成功读取 {trial.evaluation.success_count}/{trial.evaluation.check_count} 次</p><small>指标反映当前样例，不代表内容独立性、事实可信度或生产验证结果。</small></>}
         <p>“可评估”表示已积累分析样本，不保证对所有人都有价值。请根据原文决定。</p>
         {trial.samples.map(sample => <article className="source-trial-sample" key={sample.url}><h3><a href={safeLink(sample.url)} target="_blank" rel="noreferrer">{sample.title}</a></h3><p>{sample.summary}</p>{sample.analysis_status === 'analyzed' ? <><Tag>相关 {sample.testing_relevance_score}</Tag><Tag>价值 {sample.testing_value_score}</Tag><p>{sample.analysis_summary}</p></> : <Tag>{sample.analysis_status === 'failed' ? '分析待重试' : '待分析'}</Tag>}</article>)}
-        {canManage && ['trial', 'ready'].includes(trial.status) && <Button type="primary" block disabled={!trial.sample_count || saving} onClick={() => promote(trial)}>确认正式启用</Button>}
+        {canManage && ['trial', 'ready'].includes(trial.status) && <Button type="primary" block disabled={!trial.sample_count || saving} onClick={() => promote(trial)}>{trial.endpoint_type === 'article' ? '确认收录此内容' : '确认正式启用'}</Button>}
       </>}
     </Drawer>
     <FocusDrawer open={focusOpen} base={focusBase} saving={saving} error={error} onClose={() => setFocusOpen(false)} onSave={async values => {

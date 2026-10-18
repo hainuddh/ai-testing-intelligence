@@ -91,7 +91,7 @@ type Endpoint = {
   id: string
   source_id: string
   name: string
-  endpoint_type: 'rss' | 'web'
+  endpoint_type: 'rss' | 'web' | 'web_listing'
   url: string
   fetch_interval_minutes: number
   max_items_per_run: number
@@ -1182,11 +1182,11 @@ function EndpointDrawer({ open, source, endpoints, form, saving, canManage, onCl
   const [editing, setEditing] = useState<Endpoint | null>(null)
   useEffect(() => { setEditing(null) }, [open, source?.id])
   return <Drawer title={<><span className="drawer-kicker">FETCH COORDINATES</span><strong>{source?.name ?? '采集端点'}</strong></>} size="large" open={open} onClose={onClose} destroyOnHidden>
-    <p className="drawer-copy">{socialPlatform ? '微信公众号和微博仅接入来源明确、已获授权的 RSS/Atom 地址；平台网页请通过人工录入提交，不会自动抓取。' : 'RSS/Atom 适合持续订阅；网页类型会把指定页面作为单条内容定期更新检查。'}</p>
+    <p className="drawer-copy">{socialPlatform ? '微信公众号和微博仅接入来源明确、已获授权的 RSS/Atom 地址；平台网页请通过人工录入提交，不会自动抓取。' : 'RSS/Atom 适合持续订阅；网页检查单个页面；网页列表从公开列表发现文章并逐篇读取。'}</p>
     <div className="endpoint-list">{endpoints.length === 0 ? <span>尚未配置采集端点</span> : endpoints.map((endpoint) => <article key={endpoint.id}><div><strong>{endpoint.name}</strong><small>{endpoint.endpoint_type.toUpperCase()} · 每 {endpoint.fetch_interval_minutes} 分钟 · {({ healthy: '最近采集成功', unhealthy: '最近采集异常', unknown: '待首次采集' } as Record<string, string>)[endpoint.health_status] ?? endpoint.health_status}</small><a href={endpoint.url} target="_blank" rel="noreferrer">{endpoint.url}</a></div>{canManage && <Space wrap><Switch aria-label={`启用端点 ${endpoint.name}`} checked={endpoint.enabled} loading={saving} onChange={enabled => onToggle(endpoint, enabled)} /><Button type="text" aria-label={`编辑端点 ${endpoint.name}`} icon={<EditOutlined />} disabled={saving} onClick={() => { setEditing(endpoint); form.setFieldsValue(endpoint) }}>编辑</Button><Button type="text" danger icon={<DeleteOutlined />} aria-label={`删除端点 ${endpoint.name}`} disabled={saving} onClick={() => Modal.confirm({ title: `删除端点「${endpoint.name}」？`, content: '删除后采集配置及其运行历史无法恢复。日常停用请关闭端点开关。', okText: '确认删除', cancelText: '取消', okButtonProps: { danger: true }, onOk: () => onDelete(endpoint) })} /></Space>}</article>)}</div>
     {canManage && <Form form={form} layout="vertical" initialValues={{ endpoint_type: 'rss', fetch_interval_minutes: 360, max_items_per_run: 50 }} onFinish={async values => { if (await onSave(values, editing)) setEditing(null) }}>
       <Form.Item label="端点名称" name="name" rules={[{ required: true, message: '请输入端点名称' }]}><Input placeholder="官方 RSS" /></Form.Item>
-      <div className="form-pair"><Form.Item label="采集类型" name="endpoint_type" rules={[{ required: true }]}><Select options={socialPlatform ? [{ value: 'rss', label: 'RSS / Atom' }] : [{ value: 'rss', label: 'RSS / Atom' }, { value: 'web', label: '网页' }]} /></Form.Item><Form.Item label="采集间隔（分钟）" name="fetch_interval_minutes" rules={[{ required: true }]}><Input type="number" min={15} max={10080} /></Form.Item></div>
+      <div className="form-pair"><Form.Item label="采集类型" name="endpoint_type" rules={[{ required: true }]}><Select options={socialPlatform ? [{ value: 'rss', label: 'RSS / Atom' }] : [{ value: 'rss', label: 'RSS / Atom' }, { value: 'web', label: '网页' }, { value: 'web_listing', label: '网页列表' }]} /></Form.Item><Form.Item label="采集间隔（分钟）" name="fetch_interval_minutes" rules={[{ required: true }]}><Input type="number" min={15} max={10080} /></Form.Item></div>
       <Form.Item label="采集地址" name="url" rules={[{ required: true, type: 'url', message: '请输入有效地址' }]}><Input placeholder="https://example.com/feed.xml" /></Form.Item>
       <Form.Item label="单次最大条数" name="max_items_per_run" rules={[{ required: true }]}><Input type="number" min={1} max={500} /></Form.Item>
       {editing && <Button block disabled={saving} onClick={() => { setEditing(null); form.resetFields() }}>取消编辑</Button>}

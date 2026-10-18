@@ -50,6 +50,9 @@ def entries(count=5, start=0):
 
 @pytest.fixture
 def network(monkeypatch):
+    from app import web_discovery
+
+    monkeypatch.setattr(web_discovery, "download", Mock(side_effect=ValueError("No web fixture")))
     monkeypatch.setattr(
         exploration,
         "CATALOG",
