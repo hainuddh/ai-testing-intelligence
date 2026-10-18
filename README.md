@@ -1,17 +1,20 @@
 # AI Testing Intelligence
 
-SIGNAL ATLAS turns technical content and GitHub projects into actionable testing intelligence: source collection, historical deduplication, analysis, automatic project research, Markdown reports, and daily email digests.
+SIGNAL ATLAS turns technical content and GitHub projects into actionable testing intelligence. Users define focus areas; the platform discovers and trials sources, collects approved feeds, analyzes content, researches previously unreported projects, and delivers Markdown reports and daily email digests.
 
 ## Product documentation
 
-Current product scope and behavior, reviewed on 2026-10-11:
+Current product scope and behavior, reviewed on 2026-10-18:
 
 - [产品说明 / Product overview](docs/product-overview-zh.md): capabilities, roles, workflows, topic management, delivery rules, and current limits.
 - [用户操作手册 / User manual](docs/user-manual-zh.md): navigation and daily operations.
+- [关注方向与信源工作台 / Source workspace](docs/source-management-zh.md): automatic discovery, isolated trials, human approval, contribution evidence, pause and archive.
 - [每日情报邮件 / Daily email](docs/daily-email-digest-zh.md): recipient windows, eligibility, schedules, statuses, SMTP, and troubleshooting.
 - [GitHub automatic discovery](docs/github-auto-discovery-plan.md): current discovery and historical-report exclusion rules; older sections are explicitly historical.
 
-GitHub research runs automatically and recommends at most five previously unreported projects per business day. Source and GitHub topics use explicit add/edit/remove drafts with undo before saving. Email combines eligible content and GitHub reports for each recipient. Existing daily batches retain their original schedule after a time setting changes; empty digests are skipped. Preparation completion and email delivery are separate states.
+Source exploration runs automatically within a maintained catalog and real reference sites found in analyzed content. Trials are isolated from formal collection and email; a maintainer or administrator must confirm promotion. Source contribution and health evidence support pause, restore, and archive decisions without deleting history. GitHub research recommends at most five previously unreported projects per business day.
+
+Source and GitHub topics use explicit add/edit/remove drafts with undo before saving. Email combines eligible content and GitHub reports for each recipient. Existing daily batches retain their original schedule after a time setting changes; empty digests are skipped. Preparation completion and email delivery are separate states.
 
 ## Development
 
@@ -79,8 +82,10 @@ Create the first administrator after the API is running:
 docker compose exec api python -m app.bootstrap admin 'replace-this-password'
 ```
 
-Add RSS/Atom or Web collection endpoints from Source Management. The `worker` service
-collects due endpoints and makes discovered content available in the intelligence feed.
+Define platform focus areas in Source Management to start automatic discovery and isolated
+trials, then review samples and confirm sources for formal collection. You can also add a
+website by URL or configure RSS/Atom or Web endpoints manually. The `worker` service
+collects due endpoints of active sources and analyzes content for the intelligence feed.
 
 WeChat Official Accounts and Weibo are available as dedicated source categories. For these
 platforms, configure only an authorized, traceable RSS/Atom feed, or use **Manual Content**

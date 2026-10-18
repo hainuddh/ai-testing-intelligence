@@ -13,7 +13,7 @@ type Delivery = {
 }
 type Batch = {
   id: number; business_date: string; status: string; prepare_at: string; cutoff_at: string;
-  send_at: string; sources_total: number; sources_completed: number;
+  send_at: string; sources_total: number; sources_completed: number; sources_skipped?: number;
   analysis_total: number; analysis_pending: number; github_status: string;
   error_message: string | null; next_attempt_at: string | null
 }
@@ -205,7 +205,7 @@ export default function EmailDigestView({ request }: { request: Request }) {
         <div className="email-history-heading"><h2>每日准备进度</h2><Button onClick={() => setProgressRefresh(value => value + 1)}>刷新准备进度</Button></div>
         {batches.length === 0 ? <p>等待下一次准备时间；完整报告准备好后按计划发送。</p> : batches.map(batch => <div key={batch.id}>
           <Space wrap><strong>{batch.business_date}</strong><Tag color={batch.status === 'delayed' ? 'orange' : batch.status === 'ready' ? 'green' : 'blue'}>{batch.status === 'delayed' ? '延迟准备' : batch.status === 'ready' ? '准备完成' : '准备中'}</Tag>
-            <span>采集{batch.sources_completed}/{batch.sources_total} · 分析{batch.analysis_total - batch.analysis_pending}/{batch.analysis_total} · GitHub研究{batch.github_status === 'completed' ? '已完成' : batch.github_status === 'failed' ? '等待重试' : '准备中'}</span></Space>
+            <span>采集{batch.sources_completed}/{batch.sources_total}{Boolean(batch.sources_skipped) && `（已跳过${batch.sources_skipped}）`} · 分析{batch.analysis_total - batch.analysis_pending}/{batch.analysis_total} · GitHub研究{batch.github_status === 'completed' ? '已完成' : batch.github_status === 'failed' ? '等待重试' : '准备中'}</span></Space>
           <p>开始：{timeText(batch.prepare_at)} · 截稿：{timeText(batch.cutoff_at)} · 计划发送：{timeText(batch.send_at)}</p>
           {batch.error_message && <p>{batch.error_message}</p>}
           {batch.next_attempt_at && <p>下次重试：{timeText(batch.next_attempt_at)}</p>}

@@ -15,7 +15,7 @@ from sqlalchemy.orm import Session
 from app.cache import delete_prefix_sync
 from app.config import settings
 from app.content_deduplication import content_url_hash, find_duplicate_content
-from app.models import ContentItem, DigestBatchEndpoint, FetchRun, SourceEndpoint
+from app.models import ContentItem, DigestBatchEndpoint, FetchRun, Source, SourceEndpoint
 
 SUMMARY_ENRICHMENT_LIMIT = 3
 
@@ -424,6 +424,18 @@ def parse_feed(data: bytes, base_url: str, limit: int) -> list[FetchedItem]:
     return items
 
 
+def is_feed_document(data: bytes) -> bool:
+    """Recognize an empty feed separately from an HTML page or malformed XML."""
+    try:
+        root = ElementTree.fromstring(data)
+    except ElementTree.ParseError:
+        return False
+    kind = local_name(root.tag)
+    return kind == "feed" or (
+        kind in {"rss", "rdf"} and any(local_name(node.tag) == "channel" for node in root)
+    )
+
+
 def download_feed(
     url: str, limit: int, discovery_url: str | None = None
 ) -> tuple[str, list[FetchedItem]]:
@@ -434,7 +446,7 @@ def download_feed(
             items = parse_feed(data, final_url, limit)
         except ElementTree.ParseError:
             items = []
-        if items:
+        if items or is_feed_document(data):
             return final_url, items
         discovery_pages.append((data, final_url))
     except (httpx.HTTPError, ValueError):
@@ -462,7 +474,7 @@ def download_feed(
             items = parse_feed(candidate_data, candidate_url, limit)
         except (ElementTree.ParseError, httpx.HTTPError, ValueError):
             continue
-        if items:
+        if items or is_feed_document(candidate_data):
             return candidate_url, items
     raise ValueError("No valid RSS or Atom feed could be discovered")
 
@@ -479,6 +491,18 @@ def parse_web(data: bytes, url: str) -> list[FetchedItem]:
 def fetch_endpoint(
     db: Session, endpoint: SourceEndpoint, *, batch_job_id: int | None = None,
 ) -> FetchRun:
+    db.refresh(endpoint)
+    source = db.get(Source, endpoint.source_id, populate_existing=True)
+    if not endpoint.enabled or source.status in {"paused", "archived"}:
+        run = FetchRun(endpoint_id=endpoint.id, status="skipped", completed_at=datetime.now(UTC))
+        db.add(run)
+        if batch_job_id is not None:
+            job = db.get(DigestBatchEndpoint, batch_job_id)
+            if job:
+                job.status, job.next_attempt_at = "skipped", None
+                job.skip_reason = "信源或采集端点已暂停"
+        db.commit()
+        return run
     run = FetchRun(endpoint_id=endpoint.id, status="running")
     db.add(run)
     db.flush()
@@ -529,6 +553,10 @@ def fetch_endpoint(
                     pass
             if existing is not None:
                 if endpoint.endpoint_type == "web" and existing.url_hash == url_hash:
+                    if (existing.title, existing.summary, existing.body) == (
+                        item.title, item.summary, item.body
+                    ):
+                        continue
                     existing.title = item.title
                     existing.summary = item.summary
                     existing.body = item.body

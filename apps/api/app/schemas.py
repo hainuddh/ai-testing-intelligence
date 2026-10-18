@@ -66,8 +66,45 @@ class SourceUpdate(BaseModel):
     languages: list[str] | None = Field(default=None, min_length=1)
     trust_level: int | None = Field(default=None, ge=1, le=5)
     topics: list[str] | None = None
-    status: str | None = Field(default=None, min_length=1, max_length=30)
+    status: Literal["active", "paused", "archived", "draft"] | None = None
     health_status: str | None = Field(default=None, min_length=1, max_length=30)
+
+
+class SourceLifecycleRequest(BaseModel):
+    action: Literal["pause", "resume", "archive", "restore"]
+
+
+class SourceContentSample(BaseModel):
+    id: int
+    title: str
+    url: str
+
+
+class SourceMetrics(BaseModel):
+    window_days: int = 30
+    collected_count: int = 0
+    analyzed_count: int = 0
+    radar_count: int = 0
+    pending_count: int = 0
+    failed_count: int = 0
+    endpoint_count: int = 0
+    enabled_endpoint_count: int = 0
+    healthy_endpoint_count: int = 0
+    unhealthy_endpoint_count: int = 0
+    health_status: Literal["unknown", "healthy", "partial", "unhealthy"] = "unknown"
+    needs_attention: bool = False
+    last_success_at: datetime | None = None
+    last_error: str | None = None
+    sample_items: list[SourceContentSample] = Field(default_factory=list)
+
+
+class SourceSummary(BaseModel):
+    total: int = 0
+    active: int = 0
+    paused: int = 0
+    archived: int = 0
+    draft: int = 0
+    needs_attention: int = 0
 
 
 class SourceResponse(BaseModel):
@@ -86,11 +123,13 @@ class SourceResponse(BaseModel):
     created_by: int
     created_at: datetime
     updated_at: datetime
+    metrics: SourceMetrics | None = None
 
 
 class SourceListResponse(BaseModel):
     items: list[SourceResponse]
     total: int
+    summary: SourceSummary = Field(default_factory=SourceSummary)
 
 
 class SourceDiscoveryRequest(BaseModel):
@@ -133,6 +172,15 @@ class EndpointCreate(BaseModel):
     url: HttpUrl
     fetch_interval_minutes: int = Field(default=360, ge=15, le=10080)
     max_items_per_run: int = Field(default=50, ge=1, le=500)
+
+
+class EndpointUpdate(BaseModel):
+    name: str | None = Field(default=None, min_length=1, max_length=200)
+    endpoint_type: Literal["rss", "web"] | None = None
+    url: HttpUrl | None = None
+    fetch_interval_minutes: int | None = Field(default=None, ge=15, le=10080)
+    max_items_per_run: int | None = Field(default=None, ge=1, le=500)
+    enabled: bool | None = None
 
 
 class EndpointResponse(BaseModel):

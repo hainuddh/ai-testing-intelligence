@@ -20,6 +20,7 @@ from app.models import (
     FetchRun,
     GitHubExplorationState,
     GitHubReport,
+    Source,
     SourceEndpoint,
 )
 
@@ -67,7 +68,9 @@ def ensure_batch(db: Session, now: datetime) -> DigestBatch | None:
             [
                 DigestBatchEndpoint(batch_id=batch.id, endpoint_id=endpoint_id)
                 for endpoint_id in db.scalars(
-                    select(SourceEndpoint.id).where(SourceEndpoint.enabled)
+                    select(SourceEndpoint.id).join(Source).where(
+                        SourceEndpoint.enabled, Source.status.not_in(["paused", "archived"])
+                    )
                 )
             ]
         )
@@ -90,8 +93,40 @@ def jobs_for(db: Session, batch: DigestBatch) -> list[DigestBatchEndpoint]:
     )
 
 
+def skip_inactive_source_jobs(db: Session, *, now: datetime | None = None) -> None:
+    """Cancel unstarted obligations without deleting history or changing frozen mail."""
+    now = utc(now or datetime.now(UTC))
+    rows = db.execute(
+        select(DigestBatchEndpoint, SourceEndpoint.enabled, Source.status)
+        .join(DigestBatch, DigestBatchEndpoint.batch_id == DigestBatch.id)
+        .join(SourceEndpoint, DigestBatchEndpoint.endpoint_id == SourceEndpoint.id)
+        .join(Source, SourceEndpoint.source_id == Source.id)
+        .where(
+            DigestBatch.status != "ready",
+            DigestBatchEndpoint.status.not_in(["succeeded", "skipped"]),
+            or_(SourceEndpoint.enabled.is_(False), Source.status.in_(["paused", "archived"])),
+        )
+        .execution_options(populate_existing=True)
+    ).all()
+    for job, enabled, source_status in rows:
+        run = db.get(FetchRun, job.run_id, populate_existing=True) if job.run_id else None
+        if run and run.status == "succeeded":
+            job.status, job.next_attempt_at = "succeeded", None
+            continue
+        if run and run.status == "running" and utc(run.started_at) > now - timedelta(hours=1):
+            continue  # An already-started request is allowed to finish.
+        job.status = "skipped"
+        job.next_attempt_at = None
+        job.skip_reason = "采集端点已停用" if not enabled else (
+            "信源已归档" if source_status == "archived" else "信源已暂停"
+        )
+    db.flush()
+
+
 def refresh_jobs(db: Session, batch: DigestBatch, now: datetime) -> None:
     for job in jobs_for(db, batch):
+        if job.status == "skipped":
+            continue
         previous_run_id = job.run_id
         run = db.get(FetchRun, job.run_id) if job.run_id else None
         latest = db.scalar(
@@ -127,6 +162,7 @@ def refresh_jobs(db: Session, batch: DigestBatch, now: datetime) -> None:
             .values(run_id=run.id, status=status, next_attempt_at=retry_at)
             .execution_options(synchronize_session=False)
         )
+    skip_inactive_source_jobs(db, now=now)
 
 
 def capture_research_completion(db: Session, batch: DigestBatch, now: datetime) -> None:
@@ -253,7 +289,9 @@ def refresh_batch(db: Session, batch: DigestBatch, now: datetime) -> None:
     # Recover publication completed immediately before a worker restart. Once captured,
     # subsequent singleton exploration runs cannot invalidate this batch's completion.
     capture_research_completion(db, batch, now)
-    pending_sources = sum(job.status != "succeeded" for job in jobs_for(db, batch))
+    pending_sources = sum(
+        job.status not in {"succeeded", "skipped"} for job in jobs_for(db, batch)
+    )
     pending_analysis = db.scalar(
         select(ContentItem.id)
         .where(ContentItem.id.in_(required), ContentItem.analysis_status != "analyzed")
@@ -465,6 +503,7 @@ def batch_progress(db: Session, batch: DigestBatch) -> dict:
         error_message=batch.error_message,
         sources_total=len(jobs),
         sources_completed=sum(job.status == "succeeded" for job in jobs),
+        sources_skipped=sum(job.status == "skipped" for job in jobs),
         analysis_total=len(batch.required_content_ids),
         analysis_pending=len(pending),
         github_status=batch.github_status,

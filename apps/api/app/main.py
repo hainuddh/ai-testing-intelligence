@@ -10,6 +10,7 @@ from app.routers import (
     database_status,
     email_digest,
     github,
+    source_exploration,
     sources,
     users,
 )
@@ -37,4 +38,5 @@ api.include_router(users.router)
 api.include_router(database_status.router)
 api.include_router(github.router)
 api.include_router(email_digest.router)
+api.include_router(source_exploration.router)
 app.include_router(api)

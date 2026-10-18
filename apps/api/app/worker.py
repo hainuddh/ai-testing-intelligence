@@ -30,8 +30,10 @@ from app.models import (
     EmailDigestRecipient,
     FetchRun,
     GitHubExplorationState,
+    Source,
     SourceEndpoint,
 )
+from app.source_exploration import run_source_exploration
 
 logging.basicConfig(level=logging.INFO, format="%(asctime)s %(levelname)s %(message)s")
 logger = logging.getLogger(__name__)
@@ -47,8 +49,9 @@ def due_endpoints(db: Session) -> list[SourceEndpoint]:
     )
     endpoints = db.execute(
         select(SourceEndpoint, last_run.c.last_started_at)
+        .join(Source)
         .outerjoin(last_run, SourceEndpoint.id == last_run.c.endpoint_id)
-        .where(SourceEndpoint.enabled | SourceEndpoint.id.in_(required_ids))
+        .where(SourceEndpoint.enabled, Source.status.not_in(["paused", "archived"]))
     ).all()
     daily_preparation = needs_daily_preparation(db, now)
     schedule = configured_digest_schedule(db, now)
@@ -222,12 +225,21 @@ def run_once() -> None:
     run_analysis()
 
 
+def run_source_discovery() -> None:
+    try:
+        with Session(engine) as db:
+            run_source_exploration(db)
+    except Exception:
+        logger.error("Source exploration could not complete; will retry on the next poll")
+
+
 def main() -> None:
     logger.info("Collection worker started poll_seconds=%s", settings.worker_poll_seconds)
-    with ThreadPoolExecutor(max_workers=2, thread_name_prefix="digest-preparation") as executor:
+    with ThreadPoolExecutor(max_workers=3, thread_name_prefix="digest-preparation") as executor:
         futures = {}
         while True:
-            for name, task in (("collection", run_once), ("github", run_github_discovery)):
+            for name, task in (("collection", run_once), ("github", run_github_discovery),
+                               ("sources", run_source_discovery)):
                 previous = futures.get(name)
                 if previous is None or previous.done():
                     if previous is not None:

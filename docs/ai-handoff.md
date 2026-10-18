@@ -3,19 +3,22 @@
 This file stores dynamic cross-session context. Git history and the current
 worktree remain the source of truth; verify them before starting work.
 
-## Repository Snapshot (2026-10-11)
+## Repository Snapshot (2026-10-18)
 
-- Branch observed: `main`; latest committed product change: `9f5d01e`
-  (`feat(web): add reversible source topic management`). Check Git again before acting.
+- Branch observed: `main`, explicitly authorized by the user for this work. The source-workspace
+  release described below builds on `dde1c67` (`fix: rename daily email digest title`). Check Git
+  for the exact current release commit and worktree before acting.
 - This snapshot reflects repository implementation, not confirmation that production runs it.
 - Current product entry point: [Product overview](product-overview-zh.md); daily email behavior:
   [Daily digest guide](daily-email-digest-zh.md); operation steps: [User manual](user-manual-zh.md).
+- Source lifecycle, discovery, trial limits, and approval: [Source workspace](source-management-zh.md).
 - Preserve unrelated untracked documentation, scripts, previews, and local skill changes.
 - Deployment target: Docker Compose. Previously recorded production constraint: 2 GB RAM with
   swap enabled; recheck actual capacity before changing resource settings.
-- This documentation update does not rerun product tests or verify production delivery. Old
-  counts of 59 backend tests and 9 frontend tests described an earlier revision and are not
-  current validation evidence. Use the relevant test suites and the release's own results.
+- This release passed 317 backend tests, 69 frontend tests, TypeScript checks, the Vite production
+  build, and Ruff for changed backend files. SQLite migration upgrade/downgrade/upgrade and
+  isolated HTTP smoke checks passed. PostgreSQL migration execution, browser visual checks,
+  production deployment, and real SMTP delivery were not verified in this release.
 
 ## Architecture Snapshot
 
@@ -24,6 +27,13 @@ worktree remain the source of truth; verify them before starting work.
 - PostgreSQL stores users, sources, endpoints, collected content, fetch runs, and analysis fields.
 - Redis caches content, collection, source, endpoint, and database-status reads; cache failures fall back to PostgreSQL.
 - Worker collects feeds/pages, analyzes pending content, and invalidates affected cache prefixes.
+- `source_catalog.py` supplies bounded known-source seeds; `source_exploration.py` also uses real
+  reference sites from analyzed content. A separate Worker task persists preferences, scheduling,
+  leases, candidates, and trial samples. Network waits release database transactions.
+- Trial samples live in `source_candidates`, not `content_items`. Promotion creates a formal source
+  and endpoint atomically after confirmation. `source_management.py` supplies server-side filters,
+  contribution/health metrics, and normalized feed duplicate checks. `SourceManagementView.tsx`
+  is the current source workspace; the older SourcesView in `App.tsx` is no longer mounted.
 - GitHub exploration has persistent scheduling and search cursors, automatically researches
   unreported projects, and publishes at most five projects per Beijing business date. Any
   historical report item permanently excludes that project from future new recommendations.
@@ -34,9 +44,27 @@ worktree remain the source of truth; verify them before starting work.
 - Source creation/editing/discovery and GitHub preferences share `TopicEditor.tsx`: row editing,
   reversible pending removal, change counts, explicit save, and retained drafts after failure.
 - Alembic migrations run through the one-shot Compose `migrate` service before API and Worker startup.
+- Migration `20261017_01_source_exploration` adds exploration preferences/candidates, source
+  lifecycle restoration state, and skipped batch reasons; existing content is preserved.
 
 ## Current Product Behavior
 
+- Users define shared source focus areas; Worker discovers and trials sources automatically,
+  but a maintainer or administrator must confirm formal activation. Clearing focus or disabling
+  exploration leaves formal sources running. Source and GitHub focus settings are separate.
+- Source discovery uses the maintained catalog and existing real reference sites, not a full-web
+  index. Default trial concurrency is three, configurable from one to five. Each check handles
+  at most five samples per source, up to twenty unique samples total; at least five actual
+  analyses make a candidate ready for evaluation. Missing/failed model analysis is not a score
+  and readiness does not imply approval. Ignored candidates remain remembered and recoverable.
+- Formal sources can be searched, filtered, paused, resumed, archived, and restored. Contribution
+  counts cover retained, source-assigned content in the last 30 days; they do not establish
+  exclusive contribution or exact duplication rates. Pending analysis is separate from quality.
+  Empty valid feeds and unchanged pages are not treated as new content or failures.
+- Endpoint editing preserves history. Paused/archived sources and disabled endpoints do not
+  start new collection requests. Unstarted daily batch obligations are skipped with a reason;
+  already started requests may finish, while frozen mail remains unchanged. Trials never enter
+  formal content, the radar, or mail preparation obligations.
 - GitHub report publication does not require manual discovery, following a repository, or
   generating a report. Failed or analyzed-but-unpublished projects remain eligible for retry.
   Existing reports are reused for the same business date; zero results do not produce an empty
@@ -46,7 +74,8 @@ worktree remain the source of truth; verify them before starting work.
   Failed exploration follows retry and rate-limit waiting rules.
 - Daily email combines admitted content intelligence and published GitHub research. The default
   content threshold is strictly above 70; it does not apply again to published GitHub report
-  items. Selection and sent-item deduplication are independent for each recipient.
+  items. Selection and sent-item deduplication are independent for each recipient. Newly frozen
+  messages use the subject `每日测试情报`; retries preserve previously frozen subjects and bodies.
 - Preparation starts two hours before the configured Beijing send time; cutoff is ten minutes
   before it. These times are fixed when a batch is created. Changing the send time affects new
   batches, not an existing one. A morning batch remains a morning batch after an afternoon edit.
@@ -55,9 +84,10 @@ worktree remain the source of truth; verify them before starting work.
   sent and later arrivals do not reopen that date. Incomplete work delays delivery and is retried.
 - New recipients receive content analyzed and GitHub reports generated after their subscription
   start, subject to batch boundaries; historical content is not automatically backfilled.
-- Roles: authenticated viewers read/filter/export intelligence and GitHub reports; maintainers
-  also create/edit sources, manage endpoints, enter authorized platform content, and manage
-  GitHub preferences/status. Deleting a whole source, collected-content administration, user
+- Roles: authenticated viewers read/filter/export intelligence and GitHub reports and inspect
+  sources, contributions, and trial samples; maintainers also manage source focus/trials and
+  lifecycle, create/edit sources, manage endpoints, enter authorized platform content, and manage
+  GitHub preferences/status. Permanently deleting a source, collected-content administration, user
   management, database status, and all email administration require an administrator.
 - Shared topic editing does not merge source topics with GitHub preferences. GitHub topics can
   be cleared to restore language discovery. Manual source creation/editing requires a topic in
@@ -66,9 +96,16 @@ worktree remain the source of truth; verify them before starting work.
   weekly/monthly aggregation, recurring snapshots of already reported projects, IM delivery,
   per-user email subscriptions, and a PAT settings workflow are not. `ATI_GITHUB_TOKEN` remains
   an optional server-side compatibility setting.
+- Source full-web discovery, per-encounter/multi-source attribution, adoption feedback, adaptive
+  polling, repair auditing, and OPML import/export remain follow-ups, not current features.
 
 ## Recent Product Commits
 
+- Current source-workspace release: automatic focus-driven trials with human approval, evidence
+  and health metrics, reversible lifecycle, endpoint editing, runtime guards, and batch skip reasons.
+  See Git history for its commit hash.
+- `dde1c67`: renamed new digest subjects and headings to `每日测试情报`.
+- `d0054b5`: refreshed product documentation and email scheduling guidance.
 - `9f5d01e`: reversible source topic management, reusing the GitHub editor interaction.
 - `271317a`: durable daily batches and independent `mail-sender` delivery.
 - `4eb0b24`: recipient management and combined content/GitHub daily digests.
@@ -85,10 +122,12 @@ the currently deployed revision or the health of the live environment.
   stage processes at most three new or existing analyzed items per cycle, fetches each original
   page once, retains at most five real HTTP/HTTPS references, and exposes them in intelligence
   details, collection details, and Markdown reports without another model call or linked-page crawl.
-- Added source discovery: the Sources page now has an "自动发现" button; maintainers can enter a website homepage, preview the discovered RSS/Atom feed with article samples, and confirm to atomically create an active source and healthy endpoint. Backend re-validates the feed at install time.
+- Added URL-based source onboarding, now labeled "通过网址添加": maintainers enter a website homepage,
+  preview the discovered RSS/Atom feed with article samples, and confirm to atomically create an
+  active source and endpoint. Backend re-validates the feed at install time.
 - Added bounded RSS/Atom self-healing: invalid or HTML endpoint responses use feed autodiscovery
-  and a small same-site candidate set, broken feed URLs can recover through the configured source
-  homepage, and only candidates with valid entries replace the endpoint URL. Namespace-aware
+  and a small same-site candidate set; broken feed URLs can recover through the configured source
+  homepage. The current release accepts valid empty feeds as healthy. Namespace-aware
   summary extraction, same-URL refresh, and capped article metadata enrichment repair missing or
   low-quality feed summaries without unbounded crawling.
 - Fixed duplicate syndicated content with different URLs bypassing URL-hash deduplication. RSS
@@ -112,7 +151,7 @@ the currently deployed revision or the health of the live environment.
 ## Operational Notes
 
 - `docker compose up -d --build` rebuilds images and automatically runs Alembic migrations through `migrate`.
-- For an email-capable release, deploy API, Worker, `mail-sender`, and Web together after the
+- For this source-workspace release, deploy API, Worker, `mail-sender`, and Web together after the
   migration service succeeds. A restart alone does not build changed code or frontend assets.
   See the deployment guide for the release procedure and SMTP environment configuration.
 - After applying code and migrations, restart affected processes if only configuration or cache
@@ -141,9 +180,10 @@ the currently deployed revision or the health of the live environment.
 
 ## Active Work
 
-- Product documentation refresh is complete. Local Markdown links,
-  heading anchors, and code fences were checked across ten updated documents. No product
-  behavior or production configuration change is implied by this documentation update.
+- Source-workspace implementation and product documentation are prepared for release; local
+  validation is recorded above. Check Git and the deployment environment before continuing.
+- Deployment remains a separate action. Verify the release's server commit, Web container
+  asset hashes, and browser-loaded hashes before claiming it is live.
 
 ## Known Follow-ups
 

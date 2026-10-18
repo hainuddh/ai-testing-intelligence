@@ -19,6 +19,18 @@ const json = (data: unknown, status = 200) => new Response(JSON.stringify(data),
   headers: { 'Content-Type': 'application/json' },
 })
 
+function mockSourceSequence(responses: Response[]) {
+  let lastSources = json({ items: [], total: 0 })
+  return vi.spyOn(globalThis, 'fetch').mockImplementation(async input => {
+    const path = String(input)
+    if (path.startsWith('/api/v1/source-exploration/')) return json({ enabled: true, topics: [], languages: ['en'], excluded_terms: [], max_trial_sources: 3 })
+    const response = responses.shift()
+    if (!response) return lastSources.clone()
+    if (path.startsWith('/api/v1/sources?')) lastSources = response.clone()
+    return response
+  })
+}
+
 function mockSourceTopicsPage(initialSources = [{ ...source, topics: ['testing', 'playwright'] }], failSave = false) {
   let items = initialSources
   return vi.spyOn(globalThis, 'fetch').mockImplementation(async (input, init) => {
@@ -79,7 +91,7 @@ describe('daily email digest', () => {
       if (path === '/api/v1/auth/me') return json({ id: 'admin', username: 'admin', role: 'admin' })
       if (path === '/api/v1/email-digest/preferences') return json(init?.method === 'PUT' ? { ...preferences, ...JSON.parse(String(init.body)) } : preferences)
       if (path === '/api/v1/email-digest/recipients') return json([{ id: 1, email: 'reader@example.com', name: '测试组', enabled: true, started_at: null, created_at: '2026-10-10T01:00:00Z' }])
-      if (path === '/api/v1/email-digest/batches') return json({ items: [{ id: 1, business_date: '2026-10-11', status: 'delayed', prepare_at: '2026-10-10T23:00:00Z', cutoff_at: '2026-10-11T00:50:00Z', send_at: '2026-10-11T01:00:00Z', sources_total: 3, sources_completed: 3, analysis_total: 5, analysis_pending: 1, github_status: 'completed', error_message: '等待本批内容分析完成或失败重试', next_attempt_at: '2026-10-11T01:05:00Z' }] })
+      if (path === '/api/v1/email-digest/batches') return json({ items: [{ id: 1, business_date: '2026-10-11', status: 'delayed', prepare_at: '2026-10-10T23:00:00Z', cutoff_at: '2026-10-11T00:50:00Z', send_at: '2026-10-11T01:00:00Z', sources_total: 3, sources_completed: 2, sources_skipped: 1, analysis_total: 5, analysis_pending: 1, github_status: 'completed', error_message: '等待本批内容分析完成或失败重试', next_attempt_at: '2026-10-11T01:05:00Z' }] })
       if (path.startsWith('/api/v1/email-digest/deliveries')) return json({ items: [{ id: 1, recipient: 'reader@example.com', business_date: '2026-10-10', status: 'sent', item_count: 3, attempts: 1, created_at: '2026-10-10T01:00:00Z', sent_at: '2026-10-10T01:00:02Z', next_attempt_at: null, error_message: null }], total: 1 })
       return json({ items: [], total: 0 })
     })
@@ -93,8 +105,9 @@ describe('daily email digest', () => {
     expect(screen.getByText(/准备时间：每天07:00/)).toBeInTheDocument()
     expect(screen.getByText(/截稿时间：每天08:50/)).toBeInTheDocument()
     expect(await screen.findByText('延迟准备')).toBeInTheDocument()
+    expect(screen.getByText(/已跳过1/)).toBeInTheDocument()
     expect(screen.getByText('等待本批内容分析完成或失败重试')).toBeInTheDocument()
-    expect(screen.getByText(/采集3\/3/)).toBeInTheDocument()
+    expect(screen.getByText(/采集2\/3/)).toBeInTheDocument()
     expect(screen.getByRole('button', { name: '刷新准备进度' })).toBeInTheDocument()
     expect(screen.getByText(/采集、内容分析和GitHub研究完成后/)).toBeInTheDocument()
     expect(screen.getByLabelText('价值分超过')).toHaveValue('70')
@@ -511,17 +524,17 @@ describe('management radar workflow', () => {
   it('allows a maintainer to create a source', async () => {
     localStorage.setItem('access_token', 'existing-token')
     const user = userEvent.setup()
-    const fetchMock = vi.spyOn(globalThis, 'fetch')
-      .mockResolvedValueOnce(json({ id: 'user-2', username: 'maintainer', role: 'maintainer' }))
-      .mockResolvedValueOnce(json({ items: [], total: 0 }))
-      .mockResolvedValueOnce(json({ items: [], total: 0 }))
-      .mockResolvedValueOnce(json(source, 201))
-      .mockResolvedValueOnce(json({ items: [source], total: 1 }))
-
+    const fetchMock = mockSourceSequence([
+      json({ id: 'user-2', username: 'maintainer', role: 'maintainer' }),
+      json({ items: [], total: 0 }),
+      json({ items: [], total: 0 }),
+      json(source, 201),
+      json({ items: [source], total: 1 })
+    ])
     render(<App />)
     await screen.findByRole('heading', { name: '内容情报' })
     await user.click(screen.getByRole('button', { name: '信源管理' }))
-    await screen.findByText('暂无信源监听点。')
+    await screen.findByText('没有符合条件的信源')
     await user.click(screen.getByRole('button', { name: '新增信源' }))
     const editor = within(await screen.findByRole('dialog'))
     fireEvent.change(editor.getByLabelText('信源名称'), { target: { value: source.name } })
@@ -537,7 +550,7 @@ describe('management radar workflow', () => {
     await user.click(editor.getByRole('button', { name: /添加主题/ }))
     await user.click(editor.getByRole('button', { name: '建立监听' }))
 
-    await waitFor(() => expect(fetchMock).toHaveBeenNthCalledWith(4, '/api/v1/sources', expect.objectContaining({
+    await waitFor(() => expect(fetchMock).toHaveBeenCalledWith('/api/v1/sources', expect.objectContaining({
       method: 'POST',
       body: JSON.stringify({
         name: source.name, source_type: 'website', trust_level: 5, homepage_url: source.homepage_url,
@@ -557,19 +570,19 @@ describe('management radar workflow', () => {
       suggested_name: 'example.com',
       samples: [{ title: 'Agent testing update', url: 'https://example.com/article', summary: 'A verified feed sample', published_at: '2026-09-03T00:00:00Z' }],
     }
-    const fetchMock = vi.spyOn(globalThis, 'fetch')
-      .mockResolvedValueOnce(json({ id: 'user-2', username: 'maintainer', role: 'maintainer' }))
-      .mockResolvedValueOnce(json({ items: [], total: 0 }))
-      .mockResolvedValueOnce(json({ items: [], total: 0 }))
-      .mockResolvedValueOnce(json(discovery))
-      .mockResolvedValueOnce(json({ source: discoveredSource, endpoint: { id: 9, source_id: 'source-2', name: 'Auto-discovered RSS/Atom', endpoint_type: 'rss', url: discovery.feed_url, fetch_interval_minutes: 360, max_items_per_run: 50, enabled: true, health_status: 'healthy' } }, 201))
-      .mockResolvedValueOnce(json({ items: [discoveredSource], total: 1 }))
-
+    const fetchMock = mockSourceSequence([
+      json({ id: 'user-2', username: 'maintainer', role: 'maintainer' }),
+      json({ items: [], total: 0 }),
+      json({ items: [], total: 0 }),
+      json(discovery),
+      json({ source: discoveredSource, endpoint: { id: 9, source_id: 'source-2', name: 'Auto-discovered RSS/Atom', endpoint_type: 'rss', url: discovery.feed_url, fetch_interval_minutes: 360, max_items_per_run: 50, enabled: true, health_status: 'healthy' } }, 201),
+      json({ items: [discoveredSource], total: 1 })
+    ])
     render(<App />)
     await screen.findByRole('heading', { name: '内容情报' })
     await user.click(screen.getByRole('button', { name: '信源管理' }))
-    await screen.findByText('暂无信源监听点。')
-    await user.click(screen.getByRole('button', { name: 'radar-chart 自动发现' }))
+    await screen.findByText('没有符合条件的信源')
+    await user.click(screen.getByRole('button', { name: '通过网址添加' }))
     await user.type(screen.getByLabelText('网站主页'), discoveredSource.homepage_url)
     await user.click(screen.getByRole('button', { name: '开始探测' }))
 
@@ -584,7 +597,7 @@ describe('management radar workflow', () => {
         languages: ['en'], trust_level: 3, topics: [],
       }),
     })))
-    expect(await screen.findByText('example.com')).toBeInTheDocument()
+    expect(await screen.findByRole('heading', { name: 'example.com' })).toBeInTheDocument()
   })
 
   it('manages source topics before installing an automatically discovered source', async () => {
@@ -601,8 +614,8 @@ describe('management radar workflow', () => {
     render(<App />)
     await screen.findByRole('heading', { name: '内容情报' })
     await user.click(screen.getByRole('button', { name: '信源管理' }))
-    await screen.findByText('暂无信源监听点。')
-    await user.click(screen.getByRole('button', { name: 'radar-chart 自动发现' }))
+    await screen.findByText('没有符合条件的信源')
+    await user.click(screen.getByRole('button', { name: '通过网址添加' }))
     const editor = within(await screen.findByRole('dialog'))
     fireEvent.change(editor.getByLabelText('网站主页'), { target: { value: discovery.homepage_url } })
     await user.click(editor.getByRole('button', { name: '开始探测' }))
@@ -630,17 +643,17 @@ describe('management radar workflow', () => {
   ])('shows a Chinese discovery notification for %s above the drawer', async (detail, expected) => {
     localStorage.setItem('access_token', 'existing-token')
     const user = userEvent.setup()
-    vi.spyOn(globalThis, 'fetch')
-      .mockResolvedValueOnce(json({ id: 'user-2', username: 'maintainer', role: 'maintainer' }))
-      .mockResolvedValueOnce(json({ items: [], total: 0 }))
-      .mockResolvedValueOnce(json({ items: [], total: 0 }))
-      .mockResolvedValueOnce(json({ detail }, 422))
-
+    mockSourceSequence([
+      json({ id: 'user-2', username: 'maintainer', role: 'maintainer' }),
+      json({ items: [], total: 0 }),
+      json({ items: [], total: 0 }),
+      json({ detail }, 422)
+    ])
     render(<App />)
     await screen.findByRole('heading', { name: '内容情报' })
     await user.click(screen.getByRole('button', { name: '信源管理' }))
-    await screen.findByText('暂无信源监听点。')
-    await user.click(screen.getByRole('button', { name: 'radar-chart 自动发现' }))
+    await screen.findByText('没有符合条件的信源')
+    await user.click(screen.getByRole('button', { name: '通过网址添加' }))
     await user.type(screen.getByLabelText('网站主页'), 'https://example.com/')
     await user.click(screen.getByRole('button', { name: '开始探测' }))
 
@@ -658,18 +671,18 @@ describe('management radar workflow', () => {
   ])('shows a Chinese installation notification for %s', async (detail, expected) => {
     localStorage.setItem('access_token', 'existing-token')
     const user = userEvent.setup()
-    vi.spyOn(globalThis, 'fetch')
-      .mockResolvedValueOnce(json({ id: 'user-2', username: 'maintainer', role: 'maintainer' }))
-      .mockResolvedValueOnce(json({ items: [], total: 0 }))
-      .mockResolvedValueOnce(json({ items: [], total: 0 }))
-      .mockResolvedValueOnce(json({ homepage_url: 'https://example.com/', feed_url: 'https://example.com/feed.xml', suggested_name: 'example.com', samples: [] }))
-      .mockResolvedValueOnce(json({ detail }, 422))
-
+    mockSourceSequence([
+      json({ id: 'user-2', username: 'maintainer', role: 'maintainer' }),
+      json({ items: [], total: 0 }),
+      json({ items: [], total: 0 }),
+      json({ homepage_url: 'https://example.com/', feed_url: 'https://example.com/feed.xml', suggested_name: 'example.com', samples: [] }),
+      json({ detail }, 422)
+    ])
     render(<App />)
     await screen.findByRole('heading', { name: '内容情报' })
     await user.click(screen.getByRole('button', { name: '信源管理' }))
-    await screen.findByText('暂无信源监听点。')
-    await user.click(screen.getByRole('button', { name: 'radar-chart 自动发现' }))
+    await screen.findByText('没有符合条件的信源')
+    await user.click(screen.getByRole('button', { name: '通过网址添加' }))
     await user.type(screen.getByLabelText('网站主页'), 'https://example.com/')
     await user.click(screen.getByRole('button', { name: '开始探测' }))
     await user.click(await screen.findByRole('button', { name: '确认并启用监听' }))
@@ -690,11 +703,12 @@ describe('management radar workflow', () => {
       manual: ['Content with this URL or title already exists', '相同链接或标题的内容已存在，请勿重复录入。'],
     }
     const [detail, expected] = details[operation as keyof typeof details]
-    vi.spyOn(globalThis, 'fetch')
-      .mockResolvedValueOnce(json({ id: 'user-2', username: 'maintainer', role: 'maintainer' }))
-      .mockResolvedValueOnce(json({ items: [], total: 0 }))
-      .mockResolvedValueOnce(json({ items: [item], total: 1 }))
-      .mockResolvedValueOnce(json({ detail }, 409))
+    mockSourceSequence([
+      json({ id: 'user-2', username: 'maintainer', role: 'maintainer' }),
+      json({ items: [], total: 0 }),
+      json({ items: [item], total: 1 }),
+      json({ detail }, 409)
+    ])
     render(<App />)
     await screen.findByRole('heading', { name: '内容情报' })
     await user.click(screen.getByRole('button', { name: '信源管理' }))
@@ -744,17 +758,18 @@ describe('management radar workflow', () => {
     localStorage.setItem('access_token', 'existing-token')
     const user = userEvent.setup()
     const wechatSource = { ...source, id: '12', name: '质量工程前沿', source_type: 'wechat' }
-    const fetchMock = vi.spyOn(globalThis, 'fetch')
-      .mockResolvedValueOnce(json({ id: 'user-2', username: 'maintainer', role: 'maintainer' }))
-      .mockResolvedValueOnce(json({ items: [], total: 0 }))
-      .mockResolvedValueOnce(json({ items: [wechatSource], total: 1 }))
-      .mockResolvedValueOnce(json({
+    const fetchMock = mockSourceSequence([
+      json({ id: 'user-2', username: 'maintainer', role: 'maintainer' }),
+      json({ items: [], total: 0 }),
+      json({ items: [wechatSource], total: 1 }),
+      json({
         id: 31, source_id: 12, source_name: wechatSource.name, title: '智能体测试方法',
         url: 'https://mp.weixin.qq.com/s/example', summary: '智能体回归测试和安全评估实践。',
         published_at: null, fetched_at: '2026-09-02T00:00:00Z', analysis_status: 'pending',
         analysis_attempts: 0, testing_relevance_score: null, testing_value_score: null,
         analysis_error: null, analyzed_at: null,
-      }, 201))
+      }, 201),
+    ])
 
     render(<App />)
     await screen.findByRole('heading', { name: '内容情报' })

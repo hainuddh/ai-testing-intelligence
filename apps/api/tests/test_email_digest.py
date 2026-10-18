@@ -554,7 +554,9 @@ def test_multiple_recipients_send_independently_and_failure_isolated(
     second = add_recipient(client, admin, "second@example.com")
     add_recipient(client, admin, "paused@example.com", enabled=False)
     obj = item(db_session, "everyone", analyzed_at=datetime.now(UTC) + timedelta(minutes=1))
-    send_time = datetime.now(UTC) + timedelta(days=1)
+    send_time = (datetime.now(UTC) + timedelta(days=2)).replace(
+        hour=1, minute=0, second=0, microsecond=0,
+    )  # Always after the 09:00 Shanghai schedule, including early-morning test runs.
 
     def send(delivery):
         if delivery.recipient == "reader@example.com":
@@ -619,7 +621,10 @@ def test_deleted_recipient_keeps_history_and_dedup_on_readd(client, db_session, 
         add_recipient(client, admin, "reader@example.com")
         obj.analyzed_at = datetime.now(UTC) + timedelta(minutes=1)
         db_session.commit()
-        result = service.run_daily_digest(db_session, now=datetime.now(UTC) + timedelta(days=1))
+        after_schedule = (datetime.now(UTC) + timedelta(days=2)).replace(
+            hour=1, minute=0, second=0, microsecond=0,
+        )
+        result = service.run_daily_digest(db_session, now=after_schedule)
     assert result[0].status == "skipped"
     send.assert_not_called()
 

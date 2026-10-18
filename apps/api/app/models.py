@@ -92,6 +92,7 @@ class DigestBatchEndpoint(Base):
     endpoint_id: Mapped[int] = mapped_column(Integer)
     run_id: Mapped[int | None] = mapped_column(Integer, nullable=True)
     status: Mapped[str] = mapped_column(String(30), default="pending")
+    skip_reason: Mapped[str | None] = mapped_column(Text, nullable=True)
     next_attempt_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
 
 
@@ -164,6 +165,7 @@ class Source(Base):
     trust_level: Mapped[int] = mapped_column(Integer, default=3)
     topics: Mapped[list[str]] = mapped_column(JSON, default=list)
     status: Mapped[str] = mapped_column(String(30), default="draft", index=True)
+    previous_status: Mapped[str] = mapped_column(String(30), default="active")
     health_status: Mapped[str] = mapped_column(String(30), default="unknown", index=True)
     created_by: Mapped[int] = mapped_column(ForeignKey("users.id"))
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utc_now)
@@ -176,6 +178,60 @@ class Source(Base):
     )
     content_items: Mapped[list["ContentItem"]] = relationship(
         back_populates="source", cascade="all, delete-orphan"
+    )
+
+
+class SourceExplorationPreference(Base):
+    __tablename__ = "source_exploration_preferences"
+
+    id: Mapped[int] = mapped_column(primary_key=True, default=1)
+    enabled: Mapped[bool] = mapped_column(Boolean, default=True)
+    topics: Mapped[list[str]] = mapped_column(JSON, default=list)
+    languages: Mapped[list[str]] = mapped_column(JSON, default=lambda: ["zh", "en"])
+    excluded_terms: Mapped[list[str]] = mapped_column(JSON, default=list)
+    max_trial_sources: Mapped[int] = mapped_column(Integer, default=3)
+    discovery_cursor: Mapped[int] = mapped_column(Integer, default=0)
+    last_started_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
+    last_completed_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
+    next_run_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
+    lease_until: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
+    lease_token: Mapped[str | None] = mapped_column(String(36))
+    last_error: Mapped[str | None] = mapped_column(Text)
+    updated_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), default=utc_now, onupdate=utc_now
+    )
+
+
+class SourceCandidate(Base):
+    """Isolated trial evidence; never part of formal content or mail preparation."""
+
+    __tablename__ = "source_candidates"
+
+    id: Mapped[int] = mapped_column(primary_key=True)
+    name: Mapped[str] = mapped_column(String(200))
+    homepage_url: Mapped[str] = mapped_column(String(2048))
+    feed_url: Mapped[str] = mapped_column(String(2048), unique=True)
+    topics: Mapped[list[str]] = mapped_column(JSON, default=list)
+    language: Mapped[str] = mapped_column(String(30), default="")
+    discovery_kind: Mapped[str] = mapped_column(String(30))
+    evidence_url: Mapped[str] = mapped_column(String(2048))
+    reason: Mapped[str] = mapped_column(Text)
+    status: Mapped[str] = mapped_column(String(30), default="trial", index=True)
+    samples: Mapped[list[dict]] = mapped_column(JSON, default=list)
+    seen_urls: Mapped[list[str]] = mapped_column(JSON, default=list)
+    sample_count: Mapped[int] = mapped_column(Integer, default=0)
+    relevant_count: Mapped[int] = mapped_column(Integer, default=0)
+    analysis_count: Mapped[int] = mapped_column(Integer, default=0)
+    last_checked_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
+    next_check_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), index=True)
+    last_error: Mapped[str | None] = mapped_column(Text)
+    consecutive_failures: Mapped[int] = mapped_column(Integer, default=0)
+    promoted_source_id: Mapped[int | None] = mapped_column(
+        ForeignKey("sources.id", ondelete="SET NULL"), nullable=True
+    )
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utc_now)
+    updated_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), default=utc_now, onupdate=utc_now
     )
 
 

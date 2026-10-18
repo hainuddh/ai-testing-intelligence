@@ -2,7 +2,11 @@
 
 本文说明如何在 Linux 服务器上使用 Docker Compose 部署 AI Testing Intelligence。命令默认在项目根目录执行，即 `compose.yaml` 所在目录。
 
+更新日期：2026-10-18。本文说明仓库对应的部署流程，不代表生产环境已经更新。
+
 当前产品能力见[产品说明](product-overview-zh.md)。每日情报邮件的SMTP参数、迁移和启用步骤见[每日情报邮件说明](daily-email-digest-zh.md)。API、Worker和独立的`mail-sender`均需读取一致的发件配置，收件邮箱与每日时间由管理员在页面设置。
+
+信源工作台升级需要执行`20261017_01_source_exploration`迁移，并更新API、Worker和Web。关注方向、自动探索与试运行规则见[信源工作台说明](source-management-zh.md)。自动探索由Worker执行，仅更新前端或重启旧容器不会载入新逻辑；试运行不参与正式邮件准备。
 
 ## 1. 部署架构
 
@@ -12,7 +16,7 @@ Docker Compose 会启动以下服务：
 | --- | --- | --- |
 | `web` | Nginx、前端静态资源和 API 反向代理 | `8080` |
 | `api` | FastAPI 应用（异步读路径 + Redis 缓存） | 无 |
-| `worker` | 定时采集和分析内容、自动研究GitHub项目、准备每日邮件批次、失效缓存 | 无 |
+| `worker` | 自动探索并试运行信源、定时采集和分析内容、自动研究GitHub项目、准备每日邮件批次、失效缓存 | 无 |
 | `mail-sender` | 独立投递已准备好的每日情报邮件，按邮箱去重和重试 | 无 |
 | `migrate` | 启动前执行一次数据库迁移 | 无 |
 | `postgres` | PostgreSQL 17 和 pgvector | 无 |
@@ -441,6 +445,30 @@ docker compose logs --tail 200 migrate api worker mail-sender web
 
 更新后重新执行健康检查，并确认 `migrate` 服务为 `Exited (0)`。若本次升级引入了缓存相关改动，建议在升级后执行 `docker compose restart api worker`，让缓存版本号与代码保持一致。之后做登录、查询、创建信源等冒烟测试。
 
+### 11.1 信源工作台版本升级
+
+已备份且确认服务器工作区干净后，在`main`部署本次版本的最简命令为：
+
+```bash
+git pull --ff-only origin main
+docker compose up -d --build api worker mail-sender web
+docker compose ps -a
+docker compose logs --tail 100 migrate api worker mail-sender web
+curl --fail http://127.0.0.1:8080/api/v1/health
+```
+
+`migrate`作为依赖执行迁移，必须成功退出。核对数据库当前版本：
+
+```bash
+docker compose exec api alembic current
+```
+
+本次版本的迁移头为`20261017_01_source_exploration`。该迁移保留已有内容，新增关注方向与候选表、信源恢复状态和邮件任务跳过原因；旧draft信源已有启用端点时会校正为active。不要仅部署Web或只重启旧容器。
+
+发布后必须完成三点版本核验：服务器执行`git rev-parse HEAD`核对目标提交；查看Web容器`/usr/share/nginx/html/index.html`引用的静态资源哈希；浏览器强制刷新后，在Network中核对实际加载的资源哈希。构建成功和健康接口可用都不能单独证明浏览器已经使用新版本。
+
+再以维护者或管理员确认信源列表、贡献和端点编辑可用，保存关注方向并检查Worker日志及下一次探索时间。关闭探索或清空方向不会停用正式来源；试运行样例不会进入雷达或邮件，只有人工确认才会正式启用。邮件按既有批次规则运行，不应以更改发送时间触发重复验收邮件。
+
 升级常见注意事项：
 
 - 依赖版本已锁定，升级构建会自动复用 Docker 缓存；若 `pip install` 或 `npm ci` 报版本解析错误，说明依赖锁定与实际环境不符，升级时应一并更新 `pyproject.toml` / `package.json` 与 lock 文件。
@@ -497,7 +525,7 @@ curl --fail http://127.0.0.1:8080/api/v1/health
 
 ### 12.3 Redis 和 MinIO
 
-当前已配置 Redis AOF 和 MinIO 数据卷，但应用现有功能尚未展示对二者的业务读写。正式启用相关功能后，应分别制定一致性备份和恢复方案，不能只复制正在写入的数据卷目录。
+Redis已用于读路径缓存并启用AOF；业务记录以PostgreSQL为准，缓存可重建，不应以Redis备份替代数据库备份。MinIO已配置数据卷，当前产品流程未使用它保存业务产物。后续启用对象存储时应另行制定一致性备份与恢复方案，不能只复制正在写入的数据卷目录。
 
 ## 13. 故障排查
 
