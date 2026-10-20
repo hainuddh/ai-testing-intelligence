@@ -6,7 +6,7 @@ from pydantic import BaseModel, ConfigDict, Field, field_validator
 from sqlalchemy import func, select
 
 from app.dependencies import CurrentUser, DbSession, MaintainerUser
-from app.models import SourceCandidate, SourceExplorationPreference
+from app.models import Source, SourceCandidate, SourceEndpoint, SourceExplorationPreference
 from app.source_exploration import (
     ACTIVE,
     SCOPE_NOTE,
@@ -163,9 +163,32 @@ def list_candidates(
 @router.post("/candidates/{candidate_id}/promote")
 def promote(candidate_id: int, db: DbSession, user: MaintainerUser):
     result = promote_candidate(db, candidate_id, user.id)
+    source = db.get(Source, result["source_id"])
+    if source is None:
+        raise HTTPException(status_code=404, detail="关联网站已不存在，请刷新信源列表。")
+    endpoint = db.scalar(
+        select(SourceEndpoint)
+        .where(
+            SourceEndpoint.source_id == source.id,
+            SourceEndpoint.enabled,
+        )
+        .order_by((SourceEndpoint.endpoint_type == "rss").desc(), SourceEndpoint.id)
+        .limit(1)
+    )
+    if source.status == "paused":
+        message = "网站已关联到已有信源，保持已暂停状态；恢复后才会继续采集。"
+    elif source.status == "archived":
+        message = "网站已关联到已有信源，保持已归档状态；恢复后才会继续采集。"
+    elif source.status == "draft" or endpoint is None:
+        message = "网站已收录，当前待配置，请在信源管理中检查采集端点。"
+    elif endpoint.endpoint_type == "rss":
+        message = "网站已收录，使用已验证RSS/Atom订阅持续采集。"
+    else:
+        message = "网站已收录，沿用已配置采集端点持续采集。"
     return {
         "candidate": CandidateResponse.model_validate(result["candidate"]),
         "source_id": result["source_id"],
+        "admission": {"status": source.status, "message": message},
     }
 
 

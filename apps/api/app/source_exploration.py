@@ -24,11 +24,15 @@ from app.models import (
     SourceExplorationPreference,
 )
 from app.source_catalog import CATALOG, CatalogSource
-from app.source_management import ensure_feed_available, normalize_feed_url
+from app.source_management import (
+    ensure_feed_available,
+    lock_source_configuration,
+    normalize_feed_url,
+)
 
 SCOPE_NOTE = (
     "从维护目录、已分析内容与试运行样例的真实链接扩展，最多两层；支持订阅、网页列表和独立文章，"
-    "不使用全网搜索。独立内容确认收录，持续网站确认启用。"
+    "不使用全网搜索。文章作为网站发现线索；确认后收录网站并探测RSS/Atom或网页列表。"
 )
 DAY = timedelta(days=1)
 ACTIVE = ("trial", "ready")
@@ -477,123 +481,137 @@ def promote_candidate(db: Session, candidate_id: int, user_id: int) -> dict:
         raise HTTPException(
             status_code=409, detail="请先恢复试运行，并查看实际文章样例后再正式启用。"
         )
-    if candidate.endpoint_type == "article":
-        return promote_article(db, candidate, user_id)
-    feed_url, homepage = candidate.feed_url, candidate.homepage_url
-    endpoint_type, topics = candidate.endpoint_type, list(candidate.topics)
-    db.commit()
-    try:
-        if endpoint_type == "web_listing":
-            from app.web_discovery import read_listing
+    return promote_website(db, candidate, user_id)
 
-            if not read_listing(feed_url, topics, 3):
-                raise ValueError("Empty listing")
-            verified = feed_url
-        else:
-            verified, _items = download_feed(feed_url, 3, homepage)
+
+def promote_website(db: Session, candidate: SourceCandidate, user_id: int) -> dict:
+    """Admit a website from observed evidence; sample articles stay isolated."""
+    from app.fetcher import normalized_link_url
+    from app.web_discovery import read_listing
+
+    candidate_id = candidate.id
+    if not normalized_link_url(candidate.homepage_url):
+        raise HTTPException(status_code=422, detail="网站主页不是有效的公开网址，无法收录。")
+    homepage = normalize_feed_url(candidate.homepage_url)
+    evidence_page, topics = candidate.feed_url, list(candidate.topics)
+    known_rss = candidate.endpoint_type == "rss"
+    db.commit()
+    verified, endpoint_type = None, None
+    try:
+        feed, _items = download_feed(
+            evidence_page if known_rss else homepage,
+            3,
+            homepage if known_rss else evidence_page,
+        )
+        # Validate with the public-URL guard without rewriting signed/feed query parameters.
+        verified = normalize_feed_url(feed) if normalized_link_url(feed) else None
+        if verified:
+            endpoint_type = "rss"
     except Exception as exc:
-        raise HTTPException(status_code=422, detail="暂时无法验证此订阅，请稍后重试。") from exc
+        if known_rss:
+            raise HTTPException(status_code=422, detail="暂时无法验证此订阅，请稍后重试。") from exc
+        # A website can still be admitted when RSS discovery is unavailable.
+        pass
+    if known_rss and verified is None:
+        raise HTTPException(status_code=422, detail="订阅地址不是有效的公开网址，无法启用。")
+    if verified is None:
+        try:
+            if read_listing(homepage, topics, 3):
+                verified, endpoint_type = homepage, "web_listing"
+        except Exception:
+            pass
+
+    lock_source_configuration(db)
     candidate = db.scalar(
         select(SourceCandidate)
         .where(SourceCandidate.id == candidate_id)
         .with_for_update()
         .execution_options(populate_existing=True)
     )
-    if candidate.status == "promoted":
-        return {"candidate": candidate, "source_id": candidate.promoted_source_id}
-    if candidate.status not in ACTIVE:
-        raise HTTPException(status_code=409, detail="试运行状态已改变，请刷新后重试。")
-    ensure_feed_available(db, verified)
-    name = candidate.name
-    ordinal = 1
-    while db.scalar(select(Source.id).where(Source.name == name)):
-        suffix = f" · {candidate.id}" if ordinal == 1 else f" · {candidate.id}-{ordinal}"
-        name = candidate.name[: 200 - len(suffix)] + suffix
-        ordinal += 1
-    source = Source(
-        name=name,
-        source_type="website",
-        homepage_url=candidate.homepage_url,
-        languages=[candidate.language] if candidate.language else ["en"],
-        topics=candidate.topics,
-        trust_level=3,
-        status="active",
-        created_by=user_id,
-        description=candidate.reason,
-    )
-    endpoint = SourceEndpoint(
-        source=source,
-        name="已验证网页列表" if endpoint_type == "web_listing" else "已验证订阅",
-        endpoint_type=endpoint_type,
-        url=normalize_feed_url(verified),
-        max_items_per_run=50,
-    )
-    db.add_all([source, endpoint])
-    try:
-        db.flush()
-        candidate.status, candidate.promoted_source_id = "promoted", source.id
-        db.commit()
-    except IntegrityError as exc:
-        db.rollback()
-        raise HTTPException(status_code=409, detail="信源配置刚刚发生变化，请刷新后重试。") from exc
-    db.refresh(candidate)
-    delete_prefix_sync("sources:list")
-    delete_prefix_sync("sources:endpoints")
-    return {"candidate": candidate, "source_id": source.id}
-
-
-def promote_article(db: Session, candidate: SourceCandidate, user_id: int) -> dict:
-    """Explicitly admit one isolated article; never schedule recurring collection."""
-    from app.content_deduplication import find_duplicate_content
-
-    # Serialize approvals along with all other endpoint/source admission paths.
-    ensure_feed_available(db, candidate.feed_url)
-    candidate = db.scalar(
-        select(SourceCandidate)
-        .where(SourceCandidate.id == candidate.id)
-        .with_for_update()
-        .execution_options(populate_existing=True)
-    )
+    if candidate is None:
+        raise HTTPException(status_code=404, detail="试运行信源已不存在，请刷新后重试。")
     if candidate.status == "promoted":
         return {"candidate": candidate, "source_id": candidate.promoted_source_id}
     if candidate.status not in ACTIVE or not candidate.samples:
         raise HTTPException(status_code=409, detail="候选状态已改变，请刷新后重试。")
-    sample = candidate.samples[0]
-    existing = find_duplicate_content(db, sample["url"], sample["title"])
-    if existing:
-        source_id = existing.source_id
-    else:
+    normalized_verified = normalize_feed_url(verified) if verified else None
+    existing_endpoint = next(
+        (
+            endpoint
+            for endpoint in db.scalars(select(SourceEndpoint))
+            if normalized_verified and normalize_feed_url(endpoint.url) == normalized_verified
+        ),
+        None,
+    )
+    source = (
+        db.get(Source, existing_endpoint.source_id)
+        if existing_endpoint
+        else next(
+            (
+                site
+                for site in db.scalars(
+                    select(Source).where(Source.homepage_url.is_not(None)).order_by(Source.id)
+                )
+                if normalize_feed_url(site.homepage_url) == normalize_feed_url(homepage)
+            ),
+            None,
+        )
+    )
+    if source is None:
+        name = (
+            (urlsplit(homepage).hostname or homepage)
+            if candidate.endpoint_type == "article"
+            else candidate.name
+        )
+        name = name[:200]
+        base, ordinal = name, 1
+        while db.scalar(select(Source.id).where(Source.name == name)):
+            suffix = f" · {candidate.id}" if ordinal == 1 else f" · {candidate.id}-{ordinal}"
+            name = base[: 200 - len(suffix)] + suffix
+            ordinal += 1
+        note = (
+            "已验证RSS/Atom订阅。"
+            if endpoint_type == "rss"
+            else "暂未发现已验证RSS/Atom，使用已验证网页列表持续采集。"
+            if endpoint_type
+            else "RSS/Atom与网页列表暂未验证通过，网站已收录，待配置采集端点。"
+        )
         source = Source(
-            name=f"独立内容 · {candidate.id} · {candidate.name}"[:200],
+            name=name,
             source_type="website",
-            homepage_url=candidate.homepage_url,
+            homepage_url=homepage,
             topics=candidate.topics,
             languages=[candidate.language] if candidate.language else [],
             trust_level=3,
             status="draft",
             created_by=user_id,
-            description="人工确认收录的独立内容，无持续采集任务。",
+            description=candidate.reason + "；" + note,
         )
         db.add(source)
         db.flush()
-        source_id = source.id
+    if verified and existing_endpoint is None:
+        ensure_feed_available(db, verified)
         db.add(
-            ContentItem(
+            SourceEndpoint(
                 source_id=source.id,
-                title=sample["title"],
-                url=sample["url"],
-                summary=sample.get("summary"),
-                body=sample.get("body"),
-                analysis_status="pending",
+                name="已验证RSS/Atom订阅" if endpoint_type == "rss" else "已验证网页列表",
+                endpoint_type=endpoint_type,
+                url=normalized_verified,
+                max_items_per_run=50,
             )
         )
-    candidate.status, candidate.promoted_source_id = "promoted", source_id
+        if source.status == "draft":
+            source.status = "active"
+    candidate.status, candidate.promoted_source_id = "promoted", source.id
+    candidate.last_error = (
+        None if verified else "网站已收录，暂未验证到RSS/Atom或网页列表，请在信源管理中配置端点。"
+    )
     try:
         db.commit()
     except IntegrityError as exc:
         db.rollback()
-        raise HTTPException(status_code=409, detail="内容刚刚已被收录，请刷新后重试。") from exc
+        raise HTTPException(status_code=409, detail="信源配置刚刚发生变化，请刷新后重试。") from exc
     db.refresh(candidate)
-    for prefix in ("sources:list", "content:list", "collected:list"):
+    for prefix in ("sources:list", "sources:endpoints"):
         delete_prefix_sync(prefix)
-    return {"candidate": candidate, "source_id": source_id}
+    return {"candidate": candidate, "source_id": source.id}

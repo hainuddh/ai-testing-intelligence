@@ -161,7 +161,7 @@ def test_scope_changed_during_request_drops_results(db_session, web):
     assert db_session.scalar(select(func.count()).select_from(SourceCandidate)) == 0
 
 
-def test_article_approval_is_idempotent_without_recurring_endpoint(db_session, web):
+def test_article_approval_admits_website_without_publishing_sample(db_session, web):
     _module, _request, _pages, owner_id = web
     exploration.run_source_exploration(db_session, now=NOW)
     found = db_session.scalar(select(SourceCandidate).where(SourceCandidate.feed_url == ARTICLE))
@@ -176,9 +176,10 @@ def test_article_approval_is_idempotent_without_recurring_endpoint(db_session, w
                 ContentItem.url == ARTICLE,
             )
         )
-        == 1
+        == 0
     )
-    assert db_session.scalar(select(func.count()).select_from(SourceEndpoint)) == 0
+    endpoint = db_session.scalar(select(SourceEndpoint))
+    assert endpoint.url == HOME and endpoint.endpoint_type == "web_listing"
 
 
 def test_listing_approval_creates_collectable_endpoint(db_session, web, monkeypatch):
@@ -287,7 +288,7 @@ def test_api_exposes_kind_and_evidence_evaluation(client, db_session, web):
     response = client.get("/api/v1/source-exploration/candidates", headers=auth)
     assert response.status_code == 200
     article = next(row for row in response.json()["items"] if row["endpoint_type"] == "article")
-    assert "单篇" in article["evaluation"]["recommendation"]
+    assert "网站" in article["evaluation"]["recommendation"]
     assert "body" not in article["samples"][0], (
         "Bounded list responses must not expose full saved bodies"
     )

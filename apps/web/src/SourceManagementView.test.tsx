@@ -12,7 +12,7 @@ function setup(role: 'maintainer' | 'viewer' | 'admin' = 'maintainer', kind = 'r
   let sources = [source]
   const request = vi.fn(async (path: string, options?: RequestInit) => {
     if (path === '/api/v1/source-exploration/preferences') return options?.method === 'PUT' ? { ...preferences, ...JSON.parse(String(options.body)) } : preferences
-    if (path.startsWith('/api/v1/source-exploration/candidates')) return options?.method === 'POST' ? { candidate: { ...candidate, status: 'promoted' }, source_id: 7 } : { items: [{ ...candidate, endpoint_type: kind, evaluation: { recommendation: '继续观察实际证据', relevant_ratio: null, average_value: null, check_count: 1, success_count: 1 }, status: path.includes('status=dismissed') ? 'dismissed' : candidate.status }], total: 1 }
+    if (path.startsWith('/api/v1/source-exploration/candidates')) return options?.method === 'POST' ? { candidate: { ...candidate, status: 'promoted' }, source_id: 7, admission: { status: 'draft', message: '网站已收录，当前待配置，请在信源管理中检查采集端点。' } } : { items: [{ ...candidate, endpoint_type: kind, evaluation: { recommendation: '继续观察实际证据', relevant_ratio: null, average_value: null, check_count: 1, success_count: 1 }, status: path.includes('status=dismissed') ? 'dismissed' : candidate.status }], total: 1 }
     if (path.endsWith('/lifecycle')) { sources = sources.map(s => ({ ...s, status: JSON.parse(String(options?.body)).action === 'pause' ? 'paused' : 'active' })); return sources[0] }
     return { items: sources, total: 42, summary: { total: 42, active: 30, paused: 8, archived: 3, draft: 1, needs_attention: 2 } }
   })
@@ -24,18 +24,23 @@ function setup(role: 'maintainer' | 'viewer' | 'admin' = 'maintainer', kind = 'r
 describe('source management workspace', () => {
   beforeEach(() => vi.restoreAllMocks())
 
-  it('reviews standalone articles as one-time admission without a subscription action', async () => {
+  it('uses an article as evidence to admit its website and discover subscriptions', async () => {
     const { request } = setup('maintainer', 'article')
     await userEvent.click(await screen.findByRole('tab', { name: '发现与试运行' }))
     await userEvent.click(await screen.findByRole('button', { name: '查看样例与评估' }))
     const detail = within(await screen.findByRole('dialog', { name: 'New Testing Blog · 试运行评估' }))
     expect(detail.getByRole('link', { name: '原始内容' })).toBeInTheDocument()
     expect(detail.queryByRole('button', { name: '确认正式启用' })).not.toBeInTheDocument()
-    await userEvent.click(detail.getByRole('button', { name: '确认收录此内容' }))
-    const confirmation = within((await screen.findByText('收录「New Testing Blog」？')).closest('[role="dialog"]') as HTMLElement)
-    expect(confirmation.getByText(/不创建持续采集任务/)).toBeInTheDocument()
-    await userEvent.click(confirmation.getByRole('button', { name: '确认收录' }))
+    expect(detail.getByRole('link', { name: '网站主页' })).toHaveAttribute('href', 'https://new.example.com')
+    await userEvent.click(detail.getByRole('button', { name: '收录此网站并探测RSS' }))
+    const confirmation = within((await screen.findByText('收录网站「new.example.com」？')).closest('[role="dialog"]') as HTMLElement)
+    expect(confirmation.getByText(/RSS\/Atom/)).toBeInTheDocument()
+    expect(confirmation.getByText(/待配置/)).toBeInTheDocument()
+    expect(confirmation.queryByText(/确认后收录这一篇/)).not.toBeInTheDocument()
+    await userEvent.click(confirmation.getByRole('button', { name: '确认收录网站' }))
     await waitFor(() => expect(request).toHaveBeenCalledWith('/api/v1/source-exploration/candidates/3/promote', { method: 'POST' }))
+    expect(await screen.findByText('网站已收录，当前待配置，请在信源管理中检查采集端点。')).toBeInTheDocument()
+    expect(screen.getByRole('tab', { name: '信源列表' })).toHaveAttribute('aria-selected', 'true')
   })
 
   it('labels a monitored webpage correctly and shows the evidence-based evaluation', async () => {

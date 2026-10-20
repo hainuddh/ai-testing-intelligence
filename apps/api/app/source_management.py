@@ -27,11 +27,15 @@ def normalize_feed_url(url: str) -> str:
     return urlunsplit((parts.scheme.lower(), hostname, parts.path or "/", parts.query, ""))
 
 
-def ensure_feed_available(db: Session, url: str, exclude_endpoint_id: int | None = None) -> None:
+def lock_source_configuration(db: Session) -> None:
     # Every official endpoint writer uses the same lock, including trial approval.
     # It serializes check+insert on PostgreSQL without rewriting existing duplicate feeds.
     if db.get_bind().dialect.name == "postgresql":
         db.execute(text("SELECT pg_advisory_xact_lock(82429103)"))
+
+
+def ensure_feed_available(db: Session, url: str, exclude_endpoint_id: int | None = None) -> None:
+    lock_source_configuration(db)
     query = select(SourceEndpoint.id, SourceEndpoint.url)
     if exclude_endpoint_id is not None:
         query = query.where(SourceEndpoint.id != exclude_endpoint_id)

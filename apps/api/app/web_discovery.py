@@ -338,7 +338,10 @@ def candidate_summary(candidate):
     ]
     average = round(sum(values) / len(values)) if values else None
     if candidate.endpoint_type == "article":
-        recommendation = "单篇内容，确认后收录，不创建持续采集任务。"
+        recommendation = (
+            "此文章作为网站发现线索；确认后收录网站并探测RSS/Atom，"
+            "样例不直接进入正式内容。"
+        )
     elif analyzed < 5:
         recommendation = "继续观察：分析样本不足，低频更新不代表低质量。"
     elif ratio >= 60 and average is not None and average >= 60:
